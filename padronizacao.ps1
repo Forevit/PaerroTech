@@ -1,0 +1,449 @@
+﻿# ============================================================
+#  SCRIPT DE PADRONIZAÇÃO DE MÁQUINA CORPORATIVA
+#  by Eduardo Ferreira
+# ============================================================
+
+# ── Auto-elevação ────────────────────────────────────────────
+if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")) {
+    Start-Process PowerShell -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -Command `"cd '$pwd'; & '$PSCommandPath';`""
+    Exit
+}
+
+# ── Sistema de Logs ──────────────────────────────────────────
+# Pasta raiz compartilhada — usada por todos os scripts (preventivas, padronização, etc.)
+# Estrutura: C:\Users\Public\Documents\Logs\
+#   ├── Padronizacao\     ← logs deste script
+#   ├── Preventiva\       ← logs de scripts de manutenção preventiva
+#   └── (outros scripts futuros...)
+$logRaiz = "C:\Users\Public\Documents\Logs"
+$logDir  = "$logRaiz\Padronizacao"
+$logFile = "$logDir\padronizacao_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').log"
+New-Item -ItemType Directory -Path $logRaiz -Force | Out-Null
+New-Item -ItemType Directory -Path $logDir  -Force | Out-Null
+
+function Write-Log {
+    param(
+        [string]$Mensagem,
+        [ValidateSet("INFO","OK","ERRO","AVISO","ETAPA")]
+        [string]$Tipo = "INFO"
+    )
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $linha     = "[$timestamp] [$Tipo] $Mensagem"
+
+    $linha | Out-File -FilePath $logFile -Append -Encoding UTF8
+
+    switch ($Tipo) {
+        "ETAPA" { Write-Host "`n$linha" -ForegroundColor Cyan   }
+        "OK"    { Write-Host $linha     -ForegroundColor Green  }
+        "ERRO"  { Write-Host $linha     -ForegroundColor Red    }
+        "AVISO" { Write-Host $linha     -ForegroundColor Yellow }
+        default { Write-Host $linha     -ForegroundColor White  }
+    }
+}
+
+function Write-LogErro {
+    param([string]$Mensagem, [System.Management.Automation.ErrorRecord]$Excecao)
+    Write-Log $Mensagem "ERRO"
+    if ($Excecao) {
+        Write-Log "  Detalhe: $($Excecao.Exception.Message)" "ERRO"
+        Write-Log "  Linha  : $($Excecao.InvocationInfo.ScriptLineNumber)" "ERRO"
+    }
+}
+
+# ── Barra de progresso ───────────────────────────────────────
+$totalEtapas = 6
+
+function Update-Progresso {
+    param([int]$Numero, [string]$Status)
+    $percentual = [math]::Round(($Numero / $totalEtapas) * 100)
+    Write-Progress `
+        -Activity        "Padronização Corporativa — by Eduardo Ferreira" `
+        -Status          "Etapa $Numero/$totalEtapas — $Status" `
+        -PercentComplete $percentual
+}
+
+# ── Constantes de estado ─────────────────────────────────────
+$regPath  = "HKLM:\SOFTWARE\Padronizacao"
+$credFile = "$env:ProgramData\paerro_cred.xml"
+
+# Resolve o caminho real do executável (.exe ou .ps1) independente de onde está
+$scriptPath = if ($MyInvocation.MyCommand.Path) {
+    $MyInvocation.MyCommand.Path
+} else {
+    [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+}
+
+function Get-Etapa {
+    if (Test-Path $regPath) {
+        return (Get-ItemProperty -Path $regPath -Name "Etapa" -ErrorAction SilentlyContinue).Etapa
+    }
+    return 0
+}
+
+function Set-Etapa($numero) {
+    if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+    Set-ItemProperty -Path $regPath -Name "Etapa" -Value $numero
+}
+
+function Set-RunOnce {
+    $caminhoSalvo = Get-DadoSalvo "ScriptPath"
+    if ($caminhoSalvo -like "*.exe") {
+        $cmd = "`"$caminhoSalvo`""
+    } else {
+        $cmd = "PowerShell.exe -NoProfile -ExecutionPolicy Bypass -File `"$caminhoSalvo`""
+    }
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" `
+                     -Name "Padronizacao" -Value $cmd
+}
+
+function Remove-Estado {
+    Remove-Item -Path $regPath -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" `
+                        -Name "Padronizacao" -ErrorAction SilentlyContinue
+    Remove-Item -Path $credFile -Force -ErrorAction SilentlyContinue
+}
+
+function Get-DadoSalvo($chave) {
+    if (Test-Path $regPath) {
+        return (Get-ItemProperty -Path $regPath -Name $chave -ErrorAction SilentlyContinue).$chave
+    }
+    return $null
+}
+
+function Set-DadoSalvo($chave, $valor) {
+    if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+    Set-ItemProperty -Path $regPath -Name $chave -Value $valor
+}
+
+# ── Detecção de fabricante + drivers ─────────────────────────
+function Install-Drivers {
+    $fabricante = (Get-WmiObject Win32_ComputerSystem).Manufacturer
+    Write-Log "Fabricante detectado: $fabricante" "INFO"
+
+    switch -Wildcard ($fabricante.ToLower()) {
+        "*dell*" {
+            Write-Log "Instalando Dell Command Update..." "INFO"
+            winget install --id Dell.CommandUpdate --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+            Start-Sleep -Seconds 10
+            $dcu = "${env:ProgramFiles}\Dell\CommandUpdate\dcu-cli.exe"
+            if (Test-Path $dcu) {
+                Write-Log "Executando Dell Command Update para instalar drivers..." "INFO"
+                Start-Process $dcu -ArgumentList "/applyUpdates -silent" -Wait
+                Write-Log "Dell Command Update concluído." "OK"
+            } else {
+                Write-Log "dcu-cli.exe não encontrado após instalação. Verifique manualmente." "AVISO"
+            }
+        }
+        "*lenovo*" {
+            Write-Log "Instalando Lenovo System Update..." "INFO"
+            winget install --id Lenovo.SystemUpdate --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+            Write-Log "Lenovo System Update instalado. Execute-o manualmente para aplicar drivers pendentes." "AVISO"
+        }
+        "*hp*" {
+            Write-Log "Instalando HP Support Assistant..." "INFO"
+            winget install --id HP.HPSupportAssistant --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+            Write-Log "HP Support Assistant instalado." "OK"
+        }
+        default {
+            Write-Log "Fabricante '$fabricante' não mapeado. Nenhum driver instalado automaticamente." "AVISO"
+        }
+    }
+}
+
+# ── Lê etapa atual ───────────────────────────────────────────
+$etapaAtual = Get-Etapa
+
+Clear-Host
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "   PADRONIZAÇÃO DE MÁQUINA CORPORATIVA" -ForegroundColor Cyan
+Write-Host "          by Eduardo Ferreira" -ForegroundColor Cyan
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Log "Script iniciado. Etapa atual: $etapaAtual" "INFO"
+Write-Log "Log salvo em: $logFile" "INFO"
+
+if ($etapaAtual -gt 0) {
+    Write-Log "Retomando a partir da etapa $etapaAtual após reboot." "AVISO"
+}
+
+# ============================================================
+# WINDOWS UPDATE EM BACKGROUND
+# ============================================================
+if ($etapaAtual -lt 1) {
+    Write-Log "Iniciando Windows Update em segundo plano..." "ETAPA"
+
+    try {
+        if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
+            Write-Log "Instalando módulo PSWindowsUpdate..." "INFO"
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null
+            Install-Module -Name PSWindowsUpdate -Force -Scope AllUsers -Confirm:$false | Out-Null
+        }
+
+        Import-Module PSWindowsUpdate -Force
+
+        $wuJob = Start-Job -ScriptBlock {
+            Import-Module PSWindowsUpdate -Force
+            Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -Verbose 2>&1
+        }
+
+        Write-Log "Windows Update rodando em background (Job ID: $($wuJob.Id))." "OK"
+
+    } catch {
+        Write-LogErro "Falha ao iniciar Windows Update em background." $_
+        Write-Log "Continuando sem Windows Update." "AVISO"
+    }
+}
+
+# ============================================================
+# ETAPA 1 — HOSTNAME + DOMÍNIO
+# ============================================================
+if ($etapaAtual -lt 1) {
+    Update-Progresso 1 "Hostname e Ingresso no Domínio"
+    Write-Log "ETAPA 1 — Hostname e Ingresso no Domínio" "ETAPA"
+
+    try {
+        $novoHostname = Read-Host "Digite o novo hostname da máquina"
+        $dominio      = Read-Host "Digite o nome do domínio (ex: empresa.local)"
+        $domAdmin     = Read-Host "Usuário do domínio com permissão para adicionar máquinas"
+        $domPass      = Read-Host "Senha do usuário do domínio" -AsSecureString
+
+        $credencial = New-Object System.Management.Automation.PSCredential($domAdmin, $domPass)
+
+        # ✅ Credencial salva criptografada via DPAPI — sem texto plano em nenhum lugar
+        $credencial | Export-Clixml -Path $credFile -Force
+        Write-Log "Credencial salva de forma segura (DPAPI) em $credFile" "INFO"
+
+        Set-DadoSalvo "Hostname"   $novoHostname
+        Set-DadoSalvo "Dominio"    $dominio
+        Set-DadoSalvo "ScriptPath" $scriptPath
+
+        Add-Computer -DomainName $dominio -Credential $credencial -NewName $novoHostname -Force -ErrorAction Stop
+        Write-Log "Máquina '$novoHostname' adicionada ao domínio '$dominio'." "OK"
+
+    } catch {
+        Write-LogErro "Falha ao ingressar no domínio ou definir hostname." $_
+        Write-Log "Verifique as credenciais e a conectividade com o domínio." "AVISO"
+        Remove-Item $credFile -Force -ErrorAction SilentlyContinue
+        pause; Exit
+    }
+
+    Set-Etapa 1
+    Set-RunOnce
+    Write-Log "Reiniciando para aplicar hostname e domínio..." "INFO"
+    Start-Sleep -Seconds 5
+    Restart-Computer -Force
+    Exit
+}
+
+# ── Recupera dados e apaga credencial imediatamente após leitura ──
+$novoHostname = Get-DadoSalvo "Hostname"
+$dominio      = Get-DadoSalvo "Dominio"
+
+if (Test-Path $credFile) {
+    Write-Log "Credencial de domínio recuperada e removida do disco." "INFO"
+    Remove-Item $credFile -Force -ErrorAction SilentlyContinue
+}
+
+# ============================================================
+# ETAPA 2 — USUÁRIO ADMINISTRADOR LOCAL (conta padrão)
+# ============================================================
+if ($etapaAtual -lt 2) {
+    Update-Progresso 2 "Habilitando Conta Administrador Local"
+    Write-Log "ETAPA 2 — Habilitando Conta Administrador Local" "ETAPA"
+
+    try {
+        $adminPass = Read-Host "Defina a senha para a conta Administrador" -AsSecureString
+        Enable-LocalUser -Name "Administrador" -ErrorAction Stop
+        Set-LocalUser    -Name "Administrador" -Password $adminPass -PasswordNeverExpires $true -ErrorAction Stop
+        Write-Log "Conta 'Administrador' habilitada e senha definida." "OK"
+
+    } catch {
+        Write-LogErro "Falha ao configurar a conta Administrador." $_
+    }
+
+    Set-Etapa 2
+}
+
+# ============================================================
+# ETAPA 3 — INSTALAÇÃO DE APLICATIVOS VIA WINGET
+# ============================================================
+if ($etapaAtual -lt 3) {
+    Update-Progresso 3 "Instalando aplicativos via Winget"
+    Write-Log "ETAPA 3 — Instalando aplicativos via Winget" "ETAPA"
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Log "Winget não encontrado. Instale o 'App Installer' pela Microsoft Store e execute novamente." "ERRO"
+        pause; Exit
+    }
+
+    $apps = @(
+        @{ Id = "Google.Chrome";                 Nome = "Google Chrome"        },
+        @{ Id = "Mozilla.Firefox";               Nome = "Mozilla Firefox"      },
+        @{ Id = "Oracle.JavaRuntimeEnvironment"; Nome = "Java 8 (JRE)"         },
+        @{ Id = "AnyDesk.AnyDesk";               Nome = "AnyDesk"              },
+        @{ Id = "Adobe.Acrobat.Reader.64-bit";   Nome = "Adobe Acrobat Reader" },
+        @{ Id = "RARLab.WinRAR";                 Nome = "WinRAR"               }
+    )
+
+    foreach ($app in $apps) {
+        try {
+            Write-Log "Instalando $($app.Nome)..." "INFO"
+            $resultado = winget install --id $app.Id --silent --accept-package-agreements --accept-source-agreements 2>&1
+            if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) {
+                # -1978335189 = já instalado (código winget)
+                Write-Log "$($app.Nome) instalado com sucesso." "OK"
+            } else {
+                Write-Log "$($app.Nome) retornou código $LASTEXITCODE. Pode ter falhado." "AVISO"
+                $resultado | Out-File -FilePath $logFile -Append -Encoding UTF8
+            }
+        } catch {
+            Write-LogErro "Erro ao instalar $($app.Nome)." $_
+        }
+    }
+
+    Set-Etapa 3
+}
+
+# ============================================================
+# ETAPA 4 — GLPI AGENT
+# ============================================================
+if ($etapaAtual -lt 4) {
+    Update-Progresso 4 "Instalando GLPI Agent"
+    Write-Log "ETAPA 4 — Instalando GLPI Agent" "ETAPA"
+
+    try {
+        $glpiUrl    = "https://github.com/glpi-project/glpi-agent/releases/download/1.9/GLPI-Agent-1.9-x64.msi"
+        $glpiServer = "https://suporte.paerro.tech/front/inventory.php"
+        $glpiMsi    = "$env:TEMP\glpi-agent.msi"
+
+        Write-Log "Baixando GLPI Agent..." "INFO"
+        Invoke-WebRequest -Uri $glpiUrl -OutFile $glpiMsi -UseBasicParsing -ErrorAction Stop
+
+        Write-Log "Instalando GLPI Agent..." "INFO"
+        $proc = Start-Process msiexec.exe -ArgumentList "/i `"$glpiMsi`" /quiet /norestart SERVER_URL=`"$glpiServer`"" -Wait -PassThru
+        if ($proc.ExitCode -eq 0) {
+            Write-Log "GLPI Agent instalado. Servidor: $glpiServer" "OK"
+        } else {
+            Write-Log "msiexec retornou código $($proc.ExitCode)." "AVISO"
+        }
+
+        Remove-Item $glpiMsi -Force -ErrorAction SilentlyContinue
+
+    } catch {
+        Write-LogErro "Falha ao instalar o GLPI Agent." $_
+    }
+
+    Set-Etapa 4
+}
+
+# ============================================================
+# ETAPA 5 — MICROSOFT OFFICE (via ODT) + DRIVERS DO FABRICANTE
+# ============================================================
+if ($etapaAtual -lt 5) {
+    Update-Progresso 5 "Instalando Microsoft Office 2021 e Drivers"
+    Write-Log "ETAPA 5 — Instalando Microsoft Office 2021" "ETAPA"
+
+    try {
+        $odtDir = "$env:TEMP\ODT"
+        New-Item -ItemType Directory -Path $odtDir -Force | Out-Null
+
+        $odtUrl = "https://download.microsoft.com/download/2/7/A/27AF1BE6-DD20-4CB4-B154-EBAB8A7D4A7E/officedeploymenttool_18129-20030.exe"
+        $odtExe = "$odtDir\odt.exe"
+
+        Write-Log "Baixando Office Deployment Tool..." "INFO"
+        Invoke-WebRequest -Uri $odtUrl -OutFile $odtExe -UseBasicParsing -ErrorAction Stop
+        Start-Process $odtExe -ArgumentList "/quiet /extract:`"$odtDir`"" -Wait
+
+        @"
+<Configuration>
+  <Add OfficeClientEdition="64" Channel="PerpetualVL2021">
+    <Product ID="ProPlus2021Volume">
+      <Language ID="pt-br" />
+      <ExcludeApp ID="Access" />
+      <ExcludeApp ID="Groove" />
+      <ExcludeApp ID="Lync" />
+      <ExcludeApp ID="OneDrive" />
+      <ExcludeApp ID="Publisher" />
+    </Product>
+  </Add>
+  <Display Level="Full" AcceptEULA="TRUE" />
+  <Property Name="AUTOACTIVATE" Value="0" />
+</Configuration>
+"@ | Out-File -FilePath "$odtDir\config.xml" -Encoding UTF8
+
+        Write-Log "Instalando Office 2021... (pode demorar vários minutos)" "INFO"
+        $proc = Start-Process "$odtDir\setup.exe" -ArgumentList "/configure `"$odtDir\config.xml`"" -Wait -PassThru
+        if ($proc.ExitCode -eq 0) {
+            Write-Log "Microsoft Office 2021 instalado com sucesso." "OK"
+        } else {
+            Write-Log "setup.exe do Office retornou código $($proc.ExitCode)." "AVISO"
+        }
+
+    } catch {
+        Write-LogErro "Falha ao instalar o Microsoft Office." $_
+    }
+
+    # ── Drivers do fabricante ────────────────────────────────
+    Write-Log "Detectando fabricante para instalação de drivers..." "INFO"
+    try {
+        Install-Drivers
+    } catch {
+        Write-LogErro "Falha ao instalar drivers do fabricante." $_
+    }
+
+    Set-Etapa 5
+}
+
+# ============================================================
+# ETAPA 6 — ATIVAÇÃO VIA MASSGRAVE (Windows + Office)
+# ============================================================
+if ($etapaAtual -lt 6) {
+    Update-Progresso 6 "Ativação via MAS"
+    Write-Log "ETAPA 6 — Ativação via MAS (Massgrave)" "ETAPA"
+
+    try {
+        Write-Log "Abrindo ativador MAS..." "INFO"
+        irm https://get.activated.win | iex
+        Write-Log "MAS executado. Verifique se a ativação foi concluída." "OK"
+    } catch {
+        Write-LogErro "Falha ao executar o MAS." $_
+    }
+
+    Set-Etapa 6
+}
+
+# ============================================================
+# AGUARDA O JOB DO WINDOWS UPDATE
+# ============================================================
+Write-Log "Verificando status do Windows Update em background..." "INFO"
+$wuJobs = Get-Job -State Running -ErrorAction SilentlyContinue | Where-Object { $_.Command -like "*WindowsUpdate*" }
+if ($wuJobs) {
+    Write-Log "Windows Update ainda em execução. Aguardando conclusão..." "AVISO"
+    $wuJobs | Wait-Job | Out-Null
+    $wuJobs | Receive-Job | Out-File -FilePath $logFile -Append -Encoding UTF8
+    Write-Log "Windows Update concluído." "OK"
+} else {
+    Write-Log "Windows Update já finalizado ou não iniciado nesta sessão." "INFO"
+}
+
+# ============================================================
+# LIMPEZA FINAL
+# ============================================================
+Write-Progress -Activity "Padronização Corporativa" -Completed
+Write-Log "Limpando estado temporário do registro..." "INFO"
+Remove-Estado
+
+Write-Log "============================================" "INFO"
+Write-Log "PADRONIZAÇÃO CONCLUÍDA COM SUCESSO" "OK"
+Write-Log "Hostname : $novoHostname" "INFO"
+Write-Log "Domínio  : $dominio" "INFO"
+Write-Log "Log salvo em: $logFile" "INFO"
+Write-Log "============================================" "INFO"
+
+Write-Host "`n============================================" -ForegroundColor Cyan
+Write-Host "   PADRONIZAÇÃO CONCLUÍDA COM SUCESSO!" -ForegroundColor Cyan
+Write-Host "   Hostname : $novoHostname"             -ForegroundColor White
+Write-Host "   Domínio  : $dominio"                  -ForegroundColor White
+Write-Host "   Log      : $logFile"                  -ForegroundColor Gray
+Write-Host "============================================" -ForegroundColor Cyan
+
+pause
