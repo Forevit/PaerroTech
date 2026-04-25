@@ -1,5 +1,3 @@
-# 🛠️ README — Preventivas
-
 # 🛠️ Preventivas
 
 <p align="center">
