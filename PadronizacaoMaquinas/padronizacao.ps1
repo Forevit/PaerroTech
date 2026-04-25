@@ -150,6 +150,51 @@ function Install-Drivers {
     }
 }
 
+# ── Config de clientes (para consulta LDAP de hostname) ──────
+$clientes = @{
+    1 = @{ Nome = "GrupoApoioCob";         Base = "GAPC"; Dominio = "DC=apoio,DC=local"     }
+    2 = @{ Nome = "GrupoLocusEmpresarial"; Base = "GLHE"; Dominio = "DC=locus,DC=local"     }
+    3 = @{ Nome = "GrupoTopClean";         Base = "GTPC"; Dominio = "DC=topclean,DC=local"  }
+    4 = @{ Nome = "GrupoEsquadra";         Base = "GESQ"; Dominio = "DC=gesquadra,DC=local" }
+}
+
+$sufixosTipo = @{
+    "1" = @{ Label = "Notebook"; Sufixo = "NTB" }
+    "2" = @{ Label = "Desktop";  Sufixo = "DSK" }
+}
+
+# ── Consulta LDAP e retorna próximo hostname sugerido ────────
+function Get-ProximoHostnameLDAP {
+    param([string]$Base, [string]$Dominio, [string]$Sufixo)
+
+    try {
+        $searcher = New-Object System.DirectoryServices.DirectorySearcher
+        $searcher.SearchRoot = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$Dominio")
+        $searcher.Filter = "(name=$Base$Sufixo*)"
+        $searcher.PropertiesToLoad.Add("name") | Out-Null
+        $resultados = $searcher.FindAll()
+
+        if ($resultados.Count -eq 0) {
+            return @{ Sugestao = "${Base}${Sufixo}0001"; Existentes = @() }
+        }
+
+        $nomes = $resultados | ForEach-Object { $_.Properties["name"][0] }
+
+        $numeros = $nomes | ForEach-Object {
+            if ($_ -match "(\d+)$") { [int]$Matches[1] }
+        } | Where-Object { $_ -ne $null } | Sort-Object
+
+        $proximo  = ($numeros | Measure-Object -Maximum).Maximum + 1
+        $sugestao = "$Base$Sufixo{0:D4}" -f $proximo
+
+        return @{ Sugestao = $sugestao; Existentes = ($nomes | Sort-Object) }
+
+    } catch {
+        Write-Log "Falha na consulta LDAP: $($_.Exception.Message)" "AVISO"
+        return $null
+    }
+}
+
 # ── Lê etapa atual ───────────────────────────────────────────
 $etapaAtual = Get-Etapa
 
@@ -194,17 +239,77 @@ if ($etapaAtual -lt 1) {
 }
 
 # ============================================================
-# ETAPA 1 — HOSTNAME + DOMÍNIO
+# ETAPA 1 — HOSTNAME + DOMÍNIO (com consulta LDAP integrada)
 # ============================================================
 if ($etapaAtual -lt 1) {
     Update-Progresso 1 "Hostname e Ingresso no Domínio"
     Write-Log "ETAPA 1 — Hostname e Ingresso no Domínio" "ETAPA"
 
     try {
-        $novoHostname = Read-Host "Digite o novo hostname da máquina"
-        $dominio      = Read-Host "Digite o nome do domínio (ex: empresa.local)"
-        $domAdmin     = Read-Host "Usuário do domínio com permissão para adicionar máquinas"
-        $domPass      = Read-Host "Senha do usuário do domínio" -AsSecureString
+        # ── Seleção de cliente ───────────────────────────────
+        Write-Host "`nSelecione o cliente:`n" -ForegroundColor Yellow
+        $clientes.GetEnumerator() | Sort-Object Key | ForEach-Object {
+            Write-Host "  [$($_.Key)] $($_.Value.Nome)" -ForegroundColor White
+        }
+        Write-Host "  [0] Pular consulta e digitar hostname manualmente`n" -ForegroundColor Gray
+
+        $opcaoCliente = Read-Host "Digite o número"
+        $hostnameSugerido = $null
+
+        if ($opcaoCliente -ne "0" -and $clientes.ContainsKey([int]$opcaoCliente)) {
+            $clienteSelecionado = $clientes[[int]$opcaoCliente]
+
+            # ── Seleção de tipo de máquina ───────────────────
+            Write-Host "`nTipo de máquina:`n" -ForegroundColor Yellow
+            Write-Host "  [1] Notebook  ($($clienteSelecionado.Base)NTB****)" -ForegroundColor White
+            Write-Host "  [2] Desktop   ($($clienteSelecionado.Base)DSK****)`n" -ForegroundColor White
+
+            $opcaoTipo = Read-Host "Escolha"
+
+            if ($sufixosTipo.ContainsKey($opcaoTipo)) {
+                $tipoSelecionado = $sufixosTipo[$opcaoTipo]
+
+                Write-Host "`nConsultando AD de $($clienteSelecionado.Nome)..." -ForegroundColor Cyan
+                Write-Log "Consultando LDAP para $($clienteSelecionado.Nome) - $($tipoSelecionado.Label)" "INFO"
+
+                $resultado = Get-ProximoHostnameLDAP `
+                    -Base    $clienteSelecionado.Base `
+                    -Dominio $clienteSelecionado.Dominio `
+                    -Sufixo  $tipoSelecionado.Sufixo
+
+                if ($resultado) {
+                    if ($resultado.Existentes.Count -gt 0) {
+                        Write-Host "`n  Máquinas já cadastradas:" -ForegroundColor Gray
+                        $resultado.Existentes | ForEach-Object {
+                            Write-Host "    · $_" -ForegroundColor DarkGray
+                        }
+                    } else {
+                        Write-Host "`n  Nenhuma máquina cadastrada ainda para este padrão." -ForegroundColor Gray
+                    }
+
+                    $hostnameSugerido = $resultado.Sugestao
+                    Write-Host "`n  ➜ Próximo hostname sugerido: " -NoNewline -ForegroundColor Green
+                    Write-Host $hostnameSugerido -ForegroundColor Yellow
+                    Write-Log "Hostname sugerido pelo LDAP: $hostnameSugerido" "OK"
+                } else {
+                    Write-Host "  Não foi possível consultar o AD. Digite o hostname manualmente." -ForegroundColor Yellow
+                }
+            }
+        }
+
+        # ── Confirmação ou digitação manual do hostname ──────
+        Write-Host ""
+        if ($hostnameSugerido) {
+            $confirmacao = Read-Host "Usar '$hostnameSugerido'? (Enter para confirmar ou digite outro)"
+            $novoHostname = if ([string]::IsNullOrWhiteSpace($confirmacao)) { $hostnameSugerido } else { $confirmacao }
+        } else {
+            $novoHostname = Read-Host "Digite o hostname da máquina"
+        }
+
+        # ── Dados do domínio ─────────────────────────────────
+        $dominio  = Read-Host "Digite o nome do domínio (ex: empresa.local)"
+        $domAdmin = Read-Host "Usuário do domínio com permissão para adicionar máquinas"
+        $domPass  = Read-Host "Senha do usuário do domínio" -AsSecureString
 
         $credencial = New-Object System.Management.Automation.PSCredential($domAdmin, $domPass)
 
@@ -289,7 +394,6 @@ if ($etapaAtual -lt 3) {
             Write-Log "Instalando $($app.Nome)..." "INFO"
             $resultado = winget install --id $app.Id --silent --accept-package-agreements --accept-source-agreements 2>&1
             if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) {
-                # -1978335189 = já instalado (código winget)
                 Write-Log "$($app.Nome) instalado com sucesso." "OK"
             } else {
                 Write-Log "$($app.Nome) retornou código $LASTEXITCODE. Pode ter falhado." "AVISO"
