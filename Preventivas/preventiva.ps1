@@ -11,7 +11,7 @@ if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:
 }
 
 # ============================================================
-# LOG
+# LOG ESTRUTURADO
 # ============================================================
 
 $BaseLog = "C:\Users\Public\Documents\Logs\Preventiva"
@@ -20,11 +20,57 @@ if (!(Test-Path $BaseLog)) {
 }
 
 $Data = Get-Date -Format "yyyy-MM-dd_HH-mm"
-$LogFile = "$BaseLog\preventiva_$Data.txt"
+$LogFile = "$BaseLog\preventiva_$env:COMPUTERNAME`_$Data.log"
 
-Start-Transcript -Path $LogFile -Append
+function Write-Log {
+    param(
+        [string]$Mensagem,
+        [string]$Nivel = "INFO"
+    )
 
-Write-Host "Iniciando preventiva..." -ForegroundColor Cyan
+    $Linha = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [$Nivel] $Mensagem"
+    Add-Content -Path $LogFile -Value $Linha
+
+    switch ($Nivel) {
+        "OK" { Write-Host $Mensagem -ForegroundColor Green }
+        "ERRO" { Write-Host $Mensagem -ForegroundColor Red }
+        "ALERTA" { Write-Host $Mensagem -ForegroundColor Yellow }
+        default { Write-Host $Mensagem }
+    }
+}
+
+Write-Log "===== INÍCIO DA PREVENTIVA =====" "INFO"
+
+
+# ============================================================
+# IDENTIFICAÇÃO DA MÁQUINA
+# ============================================================
+
+$Hostname = $env:COMPUTERNAME
+
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "PREVENTIVA CORPORATIVA" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "HOSTNAME: $Hostname" -ForegroundColor Yellow
+Write-Host "Data: $(Get-Date -Format 'dd/MM/yyyy HH:mm')" -ForegroundColor Gray
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+
+
+# ============================================================
+# INTERNET CHECK
+# ============================================================
+
+$InternetOK = $false
+
+try {
+    Invoke-WebRequest "https://www.google.com" -TimeoutSec 5 | Out-Null
+    $InternetOK = $true
+    Write-Log "Conectividade com a internet OK" "OK"
+} catch {
+    Write-Log "Sem acesso à internet" "ALERTA"
+}
 
 # ============================================================
 # 1. ADMINISTRADOR LOCAL
@@ -43,79 +89,76 @@ try {
     net user Administrador $SenhaPlain
 
     $Status_Admin = "OK"
-    Write-Host "Administrador configurado." -ForegroundColor Green
+    Write-Log "Administrador configurado" "OK"
 } catch {
-    Write-Host "Erro ao configurar Administrador." -ForegroundColor Red
+    Write-Log "Erro ao configurar Administrador: $_" "ERRO"
 }
 
 # ============================================================
-# 2. ATIVAÇÃO DO WINDOWS
+# 2. WINDOWS STATUS
 # ============================================================
 
 $Status_Windows = "ERRO"
 
-$WindowsAtivo = (cscript //nologo C:\Windows\System32\slmgr.vbs /xpr)
+try {
+    $WindowsAtivo = (cscript //nologo C:\Windows\System32\slmgr.vbs /xpr)
 
-if ($WindowsAtivo -match "permanently activated") {
-    $Status_Windows = "OK"
+    if ($WindowsAtivo -match "permanently activated") {
+        $Status_Windows = "OK"
+        Write-Log "Windows ativado" "OK"
+    } else {
+        Write-Log "Windows não ativado" "ALERTA"
+    }
+
+    Write-Output $WindowsAtivo
+} catch {
+    Write-Log "Erro Windows status: $_" "ERRO"
 }
-
-Write-Output $WindowsAtivo
 
 # ============================================================
 # 3. OFFICE
 # ============================================================
 
-$Office_Status = "NÃO INSTALADO"
-$Office_Tipo = "DESCONHECIDO"
 $Office_Ativado = "NÃO"
 
-$OfficeReg = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* ,
-                             HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* `
-                             -ErrorAction SilentlyContinue |
-Where-Object { $_.DisplayName -like "*Office*" }
+try {
+    $OSPPPaths = @(
+        "C:\Program Files\Microsoft Office\Office16\OSPP.VBS",
+        "C:\Program Files (x86)\Microsoft Office\Office16\OSPP.VBS",
+        "C:\Program Files\Microsoft Office\root\Office16\OSPP.VBS",
+        "C:\Program Files (x86)\Microsoft Office\root\Office16\OSPP.VBS"
+    )
 
-if ($OfficeReg) {
-    $Office_Status = "INSTALADO"
-}
+    foreach ($path in $OSPPPaths) {
+        if (Test-Path $path) {
+            $status = cscript //nologo $path /dstatus
 
-$C2R = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -ErrorAction SilentlyContinue
-if ($C2R) {
-    $Office_Tipo = "Microsoft 365 / Click-to-Run"
-}
-
-$OSPPPaths = @(
-    "C:\Program Files\Microsoft Office\Office16\OSPP.VBS",
-    "C:\Program Files (x86)\Microsoft Office\Office16\OSPP.VBS",
-    "C:\Program Files\Microsoft Office\root\Office16\OSPP.VBS",
-    "C:\Program Files (x86)\Microsoft Office\root\Office16\OSPP.VBS"
-)
-
-foreach ($path in $OSPPPaths) {
-    if (Test-Path $path) {
-        $status = cscript //nologo $path /dstatus
-
-        if ($status -match "LICENSE STATUS:\s+---LICENSED---") {
-            $Office_Ativado = "SIM"
-        }
-        elseif ($status -match "NOTIFICATIONS") {
-            $Office_Ativado = "IRREGULAR"
+            if ($status -match "LICENSE STATUS:\s+---LICENSED---") {
+                $Office_Ativado = "SIM"
+            }
         }
     }
+
+    Write-Log "Office status: $Office_Ativado" "INFO"
+
+} catch {
+    Write-Log "Erro Office: $_" "ERRO"
 }
 
 # ============================================================
 # 4. WINDOWS UPDATE
 # ============================================================
 
-$Status_Update = "OK"
-
 try {
     Install-Module PSWindowsUpdate -Force -Confirm:$false -ErrorAction SilentlyContinue
     Import-Module PSWindowsUpdate
+
+    Write-Log "Executando Windows Update..." "INFO"
     Get-WindowsUpdate -Install -AcceptAll -IgnoreReboot
+
+    Write-Log "Windows Update concluído" "OK"
 } catch {
-    $Status_Update = "ERRO"
+    Write-Log "Erro Windows Update: $_" "ERRO"
 }
 
 # ============================================================
@@ -126,78 +169,95 @@ try {
     $OfficeC2R = "C:\Program Files\Common Files\Microsoft Shared\ClickToRun\OfficeC2RClient.exe"
 
     if (Test-Path $OfficeC2R) {
+        Write-Log "Atualizando Office..." "INFO"
         Start-Process $OfficeC2R -ArgumentList "/update user displaylevel=false forceappshutdown=true" -Wait
     }
-} catch {}
+} catch {
+    Write-Log "Erro Office Update: $_" "ERRO"
+}
 
 # ============================================================
 # 6. WINGET
 # ============================================================
 
 try {
+    Write-Log "Executando Winget upgrade..." "INFO"
     winget upgrade --all --silent --accept-source-agreements --accept-package-agreements
-} catch {}
-
-# ============================================================
-# 7. DRIVERS
-# ============================================================
-
-$Lenovo = "C:\Program Files (x86)\Lenovo\System Update\tvsu.exe"
-if (Test-Path $Lenovo) {
-    Start-Process $Lenovo -ArgumentList "/CM -search A -action INSTALL -noicon -includerebootpackages 3" -Wait
+} catch {
+    Write-Log "Erro Winget: $_" "ERRO"
 }
 
-$Dell = "C:\Program Files (x86)\Dell\CommandUpdate\dcu-cli.exe"
-if (Test-Path $Dell) {
-    Start-Process $Dell -ArgumentList "/applyUpdates -silent" -Wait
+# ============================================================
+# 7. DRIVERS (FABRICANTE)
+# ============================================================
+
+try {
+    $Fabricante = (Get-CimInstance Win32_ComputerSystem).Manufacturer
+    Write-Log "Fabricante: $Fabricante" "INFO"
+
+    if ($Fabricante -like "*Lenovo*") {
+
+        $Lenovo = "C:\Program Files (x86)\Lenovo\System Update\tvsu.exe"
+
+        if (Test-Path $Lenovo) {
+            Write-Log "Executando Lenovo Update..." "INFO"
+            Start-Process $Lenovo -ArgumentList "/CM -search A -action INSTALL -noicon -includerebootpackages 3" -Wait
+        } else {
+            Write-Log "Lenovo Update não encontrado" "ALERTA"
+            if ((Read-Host "Deseja instalar Lenovo System Update? (S/N)") -match "^[sS]$") {
+                Write-Log "Instalação manual necessária" "ALERTA"
+            }
+        }
+    }
+
+    elseif ($Fabricante -like "*Dell*") {
+
+        $Dell = "C:\Program Files (x86)\Dell\CommandUpdate\dcu-cli.exe"
+
+        if (Test-Path $Dell) {
+            Write-Log "Executando Dell Update..." "INFO"
+            Start-Process $Dell -ArgumentList "/applyUpdates -silent" -Wait
+        } else {
+            Write-Log "Dell Update não encontrado" "ALERTA"
+            if ((Read-Host "Deseja instalar Dell Command Update? (S/N)") -match "^[sS]$") {
+                Write-Log "Instalação manual necessária" "ALERTA"
+            }
+        }
+    }
+
+} catch {
+    Write-Log "Erro Drivers: $_" "ERRO"
 }
 
 # ============================================================
 # 8. GLPI AGENT
 # ============================================================
 
-$GLPI_Status = "NÃO INSTALADO"
-$GLPI_Servico = "INEXISTENTE"
-$GLPI_Comunicacao = "FALHA"
+try {
+    $GLPIService = Get-Service -Name "glpi-agent" -ErrorAction SilentlyContinue
 
-$GLPIService = Get-Service -Name "glpi-agent" -ErrorAction SilentlyContinue
+    if ($GLPIService) {
+        Write-Log "GLPI Agent instalado" "OK"
 
-if ($GLPIService) {
-    $GLPI_Status = "INSTALADO"
+        if ($GLPIService.Status -ne "Running") {
+            Start-Service glpi-agent
+        }
 
-    if ($GLPIService.Status -eq "Running") {
-        $GLPI_Servico = "RODANDO"
-    } else {
-        Start-Service glpi-agent
-        Start-Sleep 3
+        $GLPIExe = "C:\Program Files\GLPI-Agent\glpi-agent.exe"
 
-        if ((Get-Service glpi-agent).Status -eq "Running") {
-            $GLPI_Servico = "INICIADO"
-        } else {
-            $GLPI_Servico = "ERRO"
+        if (Test-Path $GLPIExe) {
+            Write-Log "Forçando inventário GLPI..." "INFO"
+            & $GLPIExe --force
         }
     }
 
-    $GLPIServer = "http://suporte.paerro.tech/front/inventory.php"
-
-    try {
-        $Response = Invoke-WebRequest -Uri $GLPIServer -UseBasicParsing -TimeoutSec 10
-        if ($Response.StatusCode -eq 200) {
-            $GLPI_Comunicacao = "OK"
-        }
-    } catch {}
-
-    $GLPIExe = "C:\Program Files\GLPI-Agent\glpi-agent.exe"
-    if (Test-Path $GLPIExe) {
-        & $GLPIExe --force
-    }
+} catch {
+    Write-Log "Erro GLPI: $_" "ERRO"
 }
 
 # ============================================================
-# 9. LIMPEZA DE USUÁRIOS (FILTRO + CONFIRMAÇÃO)
+# 9. LIMPEZA DE PERFIS (>90 dias)
 # ============================================================
-
-$Status_Perfis = "OK"
 
 try {
     $UsuarioAtual = $env:USERNAME
@@ -209,80 +269,75 @@ try {
         $_.LocalPath -notmatch "\\Administrador$" -and
         $_.LocalPath -notmatch "\\Default" -and
         $_.LocalPath -notmatch "\\Public" -and
-        $_.LocalPath -notmatch "\\All Users" -and
-        $_.LocalPath -notmatch "\\Default User" -and
         $_.LocalPath -notmatch "\\$UsuarioAtual$"
     }
 
     if ($Perfis) {
-        $Lista = $Perfis | ForEach-Object {
+
+        $Lista = foreach ($Perfil in $Perfis) {
+
+            $Tamanho = (Get-ChildItem $Perfil.LocalPath -Recurse -ErrorAction SilentlyContinue |
+                Measure-Object Length -Sum).Sum / 1GB
+
             [PSCustomObject]@{
-                Usuario   = $_.LocalPath
-                UltimoUso = [Management.ManagementDateTimeConverter]::ToDateTime($_.LastUseTime)
+                Usuario   = $Perfil.LocalPath
+                UltimoUso = [Management.ManagementDateTimeConverter]::ToDateTime($Perfil.LastUseTime)
+                TamanhoGB = "{0:N2}" -f $Tamanho
             }
         }
 
         $Lista | Format-Table -AutoSize
 
-        $Confirmacao = Read-Host "Deseja remover esses perfis? (S/N)"
-
-        if ($Confirmacao -match "^[sS]$") {
+        if ((Read-Host "Remover perfis antigos? (S/N)") -match "^[sS]$") {
             foreach ($Perfil in $Perfis) {
                 Remove-CimInstance $Perfil
+                Write-Log "Perfil removido: $($Perfil.LocalPath)" "OK"
             }
-        } else {
-            $Status_Perfis = "CANCELADO"
         }
     }
+
 } catch {
-    $Status_Perfis = "ERRO"
+    Write-Log "Erro perfis: $_" "ERRO"
 }
 
 # ============================================================
 # 10. LIMPEZA DE DISCO
 # ============================================================
 
-$Status_Limpeza = "OK"
-
 try {
+    Write-Log "Executando limpeza de disco..." "INFO"
+
     cleanmgr /sagerun:1
+    Dism.exe /online /Cleanup-Image /StartComponentCleanup /Quiet
+
     Remove-Item "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Log "Limpeza concluída" "OK"
+
 } catch {
-    $Status_Limpeza = "ERRO"
+    Write-Log "Erro limpeza: $_" "ERRO"
 }
 
 # ============================================================
 # CHECKLIST FINAL
 # ============================================================
 
-$Licenca_OK = $true
-
-if ($Status_Windows -ne "OK") { $Licenca_OK = $false }
-if ($Office_Ativado -ne "SIM") { $Licenca_OK = $false }
+Write-Log "===== CHECKLIST FINAL =====" "INFO"
 
 Write-Host ""
-Write-Host "==============================" -ForegroundColor Cyan
-Write-Host "CHECKLIST FINAL" -ForegroundColor Cyan
-Write-Host "==============================" -ForegroundColor Cyan
-
-Write-Host "Administrador: $Status_Admin"
+Write-Host "STATUS FINAL" -ForegroundColor Cyan
 Write-Host "Windows: $Status_Windows"
-Write-Host "Office: $Office_Status | Ativado: $Office_Ativado"
-Write-Host "GLPI: $GLPI_Status | Serviço: $GLPI_Servico | Comunicação: $GLPI_Comunicacao"
-Write-Host "Updates: $Status_Update"
-Write-Host "Perfis: $Status_Perfis"
-Write-Host "Limpeza: $Status_Limpeza"
+Write-Host "Office: $Office_Ativado"
+Write-Host "Admin: $Status_Admin"
 
-Write-Host ""
-Write-Host "==============================" -ForegroundColor Cyan
-Write-Host "LICENCIAMENTO" -ForegroundColor Cyan
-Write-Host "==============================" -ForegroundColor Cyan
-
-if ($Licenca_OK) {
-    Write-Host "Licenciamento OK." -ForegroundColor Green
-} else {
-    Write-Host "PENDENTE: Ativar Windows e/ou Office." -ForegroundColor Yellow
+if ($Status_Windows -ne "OK" -or $Office_Ativado -ne "SIM") {
+    Write-Host ""
+    Write-Host "⚠ LICENCIAMENTO PENDENTE (Windows/Office)" -ForegroundColor Yellow
+}
+else {
+    Write-Host ""
+    Write-Host "✔ LICENCIAMENTO OK" -ForegroundColor Green
 }
 
-Stop-Transcript
+Write-Log "===== FIM DA PREVENTIVA =====" "INFO"
