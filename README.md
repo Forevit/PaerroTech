@@ -45,6 +45,7 @@ Este ambiente reúne scripts utilizados no dia a dia para:
 📁 PaerroTech
 ├── 📁 Padronizacao-Maquinas/   → Setup completo de estações
 ├── 📁 Preventivas/             → Rotinas de manutenção
+├── 📁 ScriptsMikrotik          → Scripts de FailOver + LoadBalance
 ├── 📁 Scripts/                 → Utilitários diversos
 └── README.md
 
