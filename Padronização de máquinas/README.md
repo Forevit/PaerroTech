@@ -131,4 +131,5 @@ Paerro-Setup.exe (opcional)
 ## 👨‍💻 Responsável
 
 **Eduardo Ferreira**
+
 Suporte Técnico Junior
