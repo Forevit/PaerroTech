@@ -1,0 +1,37 @@
+#======= Aterar =================
+global ComentarioDHCPC "Link-2"
+global Distancia 10
+#==============================
+
+
+#====== Não alterar  ==============
+global InterfaceDHCPC $"interface"
+global GatewayDHCPC $"gateway-address"
+
+
+
+:if ($bound=1) do={
+
+#Cria a rota default se ela nao existir
+if ([ip route print count-only where routing-mark<>"" gateway~$InterfaceDHCPC static dst-address=0.0.0.0/0] = 0) do={
+/ip route add gateway=($GatewayDHCPC."%".$InterfaceDHCPC) comment=$ComentarioDHCPC distance=$Distancia
+} 
+
+#Alterar o gateway
+/ip route set [find gateway~$InterfaceDHCPC static dst-address=0.0.0.0/0] gateway=($GatewayDHCPC."%".$InterfaceDHCPC) disabled=no
+
+
+} else={
+
+/ip route disable [find gateway~$InterfaceDHCPC static dst-address=0.0.0.0/0]
+
+}
+
+#/log warning message=$InterfaceDHCPC
+#/log warning message=$ComentarioDHCPC
+#/log warning message=($GatewayDHCPC."%".$InterfaceDHCPC)
+#/log warning message=$bound
+
+
+
+

@@ -1,0 +1,175 @@
+#=================================================
+# Desenvolvido por Francisco Neto                 
+#       www.redesbrasil.com                        
+#=================================================
+
+
+#============== Instruções =======================
+# Colocar comentario nas rotas default
+# Ex. Link1, Link2, Link-Vivo, Link-OI
+#=================================================
+#=================================================
+
+
+
+#=================================================
+#======== Remove regras e scripts antigas   ======
+#=================================================
+
+
+/ip route remove [find comment~"!=="]
+/ip route rule remove [find comment~"!=="]
+/ip firewall mangle remove [find comment="Jump para chain pcc-dinamico"]
+/ip firewall mangle remove [find comment~"Marca de roteamento para"]
+/ip firewall mangle remove [find comment~"Marca de conexao PCC"]
+
+/system script remove [find name=balance]
+/system script remove [find name=failover]
+/system scheduler remove [find name="executa script failover"]
+
+
+#=================================================
+#=================================================
+
+
+#=================================================
+#======== Cria confis inciciais  =================
+#=================================================
+
+:foreach i in=[/ip route find  dst-address=0.0.0.0/0 routing-mark<>""] do={
+
+:global gateway [/ip route get number=$i gateway]
+:global comentario [/ip route get number=$i comment]
+
+#=== Regras para failover
+/ip route add gateway=$gateway routing-mark=("rota-de-teste-para-" . $comentario) comment=("!== Rota de teste")
+/ip route rule add action=lookup-only-in-table routing-mark=("rota-de-teste-para-" . $comentario) table=("rota-de-teste-para-" . $comentario) comment=("!== Force teste para o failover ==> ".$comentario)
+
+#=== Regras para loadbalance
+/ip route add disabled=yes gateway=$gateway routing-mark=$comentario comment=("!== Rota do balance ==> ".$comentario)
+/ip firewall mangle
+add action=mark-routing chain=prerouting comment=("Marca de roteamento para ".$comentario) connection-mark=("conexao-".$comentario) dst-address-list=!rede-local-geral new-routing-mark=$comentario passthrough=no src-address-list=rede-local-privada
+}
+/ip firewall mangle 
+add action=jump chain=prerouting comment="Jump para chain pcc-dinamico" connection-mark=no-mark connection-state=new dst-address-list=!rede-local-geral jump-target=pcc-dinamico src-address-list=rede-local-privada place-before=0
+
+#=================================================
+#=================================================
+
+
+
+
+
+
+#=================================================
+#============ Inclui scripts  ====================
+#=================================================
+
+/system scheduler
+add interval=15s name="executa script failover" on-event=failover policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon start-time=\
+    startup
+
+/system script
+add name=balance owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source="########### Colocar o peso no campo weight d\
+    a rota ####################################################\r\
+    \n\r\
+    \n########### Tipo do PCC use src-address: ou both-addresses: ###########################################\r\
+    \n:global tipopcc src-address:\r\
+    \n\r\
+    \n############## Calcula num de regras para o PCC ######################################################\r\
+    \n:global numregraspcc 0 \r\
+    \n:foreach i in=[/ip route find  dst-address=0.0.0.0/0 routing-mark<>\"\" disabled=no ] do={\r\
+    \n:global peso [/ip route get number=\$i bgp-weight]\r\
+    \n:global numregraspcc (\$numregraspcc+\$peso) \r\
+    \n}\r\
+    \n\r\
+    \n\r\
+    \n############## Fim calcula num de regras para o PCC #################################################\r\
+    \n\r\
+    \n\r\
+    \n/ip firewall mangle remove [find comment~\"PCC\"]\r\
+    \n\r\
+    \n:global restomax (\$numregraspcc-1)\r\
+    \n:global resto 0\r\
+    \n:foreach i in=[/ip route find  dst-address=0.0.0.0/0 routing-mark<>\"\" disabled=no ] do={\r\
+    \n\r\
+    \n:global comentario [/ip route get number=\$i comment]\r\
+    \n:global link \$comentario\r\
+    \n:global peso [/ip route get number=\$i bgp-weight]\r\
+    \n:for rota from=1 to=\$peso do={:if (\$restomax >= \$resto) do={\r\
+    \n/ip firewall mangle\r\
+    \nadd action=mark-connection chain=pcc-dinamico new-connection-mark=(\"conexao-\".\$link) passthrough=yes per-connection-classifier=(\$tipopcc.\$numr\
+    egraspcc.\"/\".\$resto) comment=(\"Marca de conexao PCC \".\$numregraspcc.\"/\".\$resto.\" ==> \".\$link)\r\
+    \n\r\
+    \n:global resto (\$resto+1)\r\
+    \n\r\
+    \n}\r\
+    \n}\r\
+    \n}\r\
+    \n\r\
+    \n\r\
+    \n\r\
+    \n"
+add name=failover owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source="# IPs a serem testados separados por virgul\
+    a (n\E3o usar nomes, pois se todas as rotas ficarem paradas n\E3o tem como resolver nomes e logo as rotas nunca ir\E3o voltar)\r\
+    \n# Interlavo = timeout de cada ping   onde 00:00:00.5 corresponde a 500ms \r\
+    \n:global IPsParaTeste \"8.8.8.8,8.8.4.4,200.160.0.8,31.13.80.8\"\r\
+    \n:global NumeroDePings 2\r\
+    \n:global Intervalo 00:00:00.3\r\
+    \n\r\
+    \n\r\
+    \n\r\
+    \n#Converte sitrngs em arrays\r\
+    \n:global IPsParaTeste [:toarray \$IPsParaTeste];\r\
+    \n\r\
+    \n\r\
+    \n\r\
+    \n#\r\
+    \n#Seleciona as tebelas de roteamento para teste\r\
+    \n\r\
+    \n:foreach i in=[/ip route find  dst-address=0.0.0.0/0 routing-mark<>\"\"] do={\r\
+    \n\r\
+    \n:delay 1\r\
+    \n:global comentario [/ip route get number=\$i comment]\r\
+    \n:global TabRoteAtual (\"rota-de-teste-para-\" . \$comentario)\r\
+    \n\r\
+    \n{\r\
+    \n:global LinkState 0\r\
+    \n:foreach IPAtualParaTeste in=\$IPsParaTeste do= \\\r\
+    \n\r\
+    \n{\r\
+    \n:set LinkState (\$LinkState + [ping \$IPAtualParaTeste interval=\$Intervalo count=\$NumeroDePings routing-table=\$TabRoteAtual])\r\
+    \n:put (\$TabRoteAtual)\r\
+    \n:put \$LinkState\r\
+    \n\r\
+    \n}\r\
+    \n#De acordo com o estado do link ativa ou desativa as rotas\r\
+    \n\r\
+    \n################## if down ##################\r\
+    \nif (\$LinkState=0) do={if ([/ip route print count-only where comment~\$comentario disabled]=0) do={\r\
+    \n\r\
+    \n/ip route disable [find comment~\$comentario]\r\
+    \n\r\
+    \nexecute {/system script run FAILOVER_ACTIONS}\r\
+    \nexecute {/system script run balance}\r\
+    \n\r\
+    \n}}\r\
+    \n\r\
+    \n################## if up ##################\r\
+    \nif (\$LinkState>0) do={if ([/ip route print count-only where comment~\$comentario disabled]>0) do={\r\
+    \n\r\
+    \n/ip route enable [find comment~\$comentario]\r\
+    \n\r\
+    \nexecute {/system script run FAILOVER_ACTIONS}\r\
+    \nexecute {/system script run balance}\r\
+    \n\r\
+    \n\r\
+    \n}}\r\
+    \n\r\
+    \n}\r\
+    \n}\r\
+    \n"
+
+
+
+

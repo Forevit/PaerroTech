@@ -1,0 +1,233 @@
+#===============================================================================================
+#                             DESENVOLVIDO POR FRANCISCO NETO                                   
+#                                  www.redesbrasil.com                                          
+#===============================================================================================
+
+
+#============== INSTRUÇÕES =====================================================================
+# COLOCAR COMENTARIO NAS ROTAS E NO FINAL TERMINAR COM # E O PESO DA ROTA                       
+# EX. "LINK 1 #5", "LINK 2 #8"                                                                    
+#===============================================================================================
+
+
+
+#===============================================================================================
+#                      REMOVE FAILOVER                                                          
+#===============================================================================================
+/
+/ip route remove [find comment~"!== ROTA FAILOVER"]
+/routing rule remove [find comment~"!=="]
+/system script remove [find name=FAILOVER]
+/system scheduler remove [find name="EXECUTA SCRIPT DE FAILOVER"]
+/ip/vrf/remove [find comment~"!== VRF FAILOVER"]
+
+
+#===============================================================================================
+#                 CRIA VRFS, ROTAS E PBRS                                                       
+#===============================================================================================
+
+:foreach i in=[/ip route find  dst-address=0.0.0.0/0 routing-table=main] do={
+
+:global gateway [/ip route get number=$i gateway]
+:global comentario [/ip route get number=$i comment]
+
+
+/ip/vrf/add interfaces=none name=("TEST-" . $comentario) comment="!== VRF FAILOVER"
+:delay 2
+/ip route add gateway=$gateway routing-table=("TEST-" . $comentario) comment=("!== ROTA FAILOVER |  " . $comentario)
+/routing rule add action=lookup-only-in-table comment="!== FORCE TESTE DE FAILOVER ==> $comentario" disabled=no routing-mark=("TEST-" . $comentario) table=("TEST-" . $comentario)
+
+
+}
+
+
+
+
+#===============================================================================================
+#======== ADICIONA O SCRIPT DE FAILOVER E SCHEDULER                                             
+#===============================================================================================
+
+
+/system scheduler
+add interval=30s name="EXECUTA SCRIPT DE FAILOVER" on-event=FAILOVER policy=\
+    ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon \
+    start-time=startup
+
+	
+/system script
+add dont-require-permissions=no name=FAILOVER owner=admin policy=ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source="#========\
+    =======================================================================================\r\
+    \n#              IPS DEVEM SER SEPARADOS POR VIRGULA                                              \r\
+    \n#              NAO USAR DOMINIOS TIPO GOOGLE.COM                                                \r\
+    \n#              Intervalo = TIMEOUT DE CADA PING ONDE 00:00:00.5 CORRESPONDE A 500ms             \r\
+    \n#===============================================================================================\r\
+    \n\r\
+    \n\r\
+    \n:global IPsParaTeste \"8.8.8.8,8.8.4.4,200.160.0.8,31.13.80.8\"\r\
+    \n:global NumeroDePings 3\r\
+    \n:global Intervalo 00:00:00.5\r\
+    \n:global IPsParaTeste [:toarray \$IPsParaTeste];\r\
+    \n\r\
+    \n\r\
+    \n\r\
+    \n#=======================================================================\
+    ========================\r\
+    \n#             SELECIONA TABELAS DE ROTAMENTO PARA TESTE                 \
+    \_                       \r\
+    \n#=======================================================================\
+    ========================\r\
+    \n\r\
+    \n:foreach i in=[/ip route find  dst-address=0.0.0.0/0 routing-table=main]\
+    \_do={\r\
+    \n\r\
+    \n/ping 127.0.0.1 count=1\r\
+    \n:delay 1\r\
+    \n:global LinkState 0\r\
+    \n:global comentario [/ip route get number=\$i comment]\r\
+    \n:global TabRoteAtual (\"TEST-\" . \$comentario)\r\
+    \n\r\
+    \n\r\
+    \n\r\
+    \n:foreach IPAtualParaTeste in=\$IPsParaTeste do={\r\
+    \n:global LinkState (\$LinkState + [ping address=\$IPAtualParaTeste  vrf=\
+    \$TabRoteAtual interval=\$Intervalo count=\$NumeroDePings ])\r\
+    \n}\r\
+    \n:global RotaAtiva [/ip route print count-only where routing-table=main c\
+    omment=\$comentario disabled=no]\r\
+    \n\r\
+    \n\r\
+    \n#=======================================================================\
+    ========================\r\
+    \n#             ATIVA OU DESATIVA ROTA DE ACORDO COM O ESTADO DE LINK     \
+    \_                       \r\
+    \n#=======================================================================\
+    ========================\r\
+    \n\r\
+    \n#                          IF DOWN                                      \
+    \_                       \r\
+    \nif (\$LinkState=0 and \$RotaAtiva>0) do={\r\
+    \n/ip route disable [find comment~\$comentario !(comment~\"!== ROTA FAILOV\
+    ER\")]\r\
+    \n\r\
+    \nexecute {/system/script/run FAILOVER_ACTIONS}\r\
+    \nexecute {/system/script/run LOAD_BALANCE_DINAMICO}\r\
+    \n\r\
+    \n\r\
+    \n\r\
+    \n}\r\
+    \n\r\
+    \n#                          IF UP                                        \
+    \_                        \r\
+    \nif (\$LinkState>0 and \$RotaAtiva=0) do={\r\
+    \n/ip route enable [find comment~\$comentario !(comment~\"!== ROTA FAILOVE\
+    R\")]\r\
+    \n\r\
+    \nexecute {/system/script/run FAILOVER_ACTIONS}\r\
+    \nexecute {/system/script/run LOAD_BALANCE_DINAMICO}\r\
+    \n\r\
+    \n\r\
+    \n\r\
+    \n}\r\
+    \n\r\
+    \n\r\
+    \n}\r\
+    \n"
+	
+/
+
+#===============================================================================================
+#                                                                                               
+#                                                                                               
+#                                                                                               
+#                O CODIGO ABAIXO FAZ PARTE DO LOADBALANCE                                       
+#                                                                                               
+#                                                                                               
+#                                                                                               
+#===============================================================================================
+
+
+#===============================================================================================
+#                      REMOVE LOADBALANCE                                                          
+#===============================================================================================
+/
+/ip firewall mangle remove [find comment~"!=="]
+/ip route remove [find comment~"!== ROTA DO BALANCE"]
+/system script remove [find name=LOAD_BALANCE_DINAMICO]
+/ip/vrf/remove [find comment~"!== VRF LOAD_BALANCE_DINAMICO"]
+#===============================================================================================
+#======== CRIA  VRFS,ROTAS E E REGRAS NA TABELA MANGLE                                                               
+#===============================================================================================
+
+
+:foreach i in=[/ip route find  dst-address=0.0.0.0/0 routing-table=main] do={
+
+:global gateway [/ip route get number=$i gateway]
+:global comentario [/ip route get number=$i comment]
+
+:put $gateway
+
+/ip/vrf/add interfaces=none name=("BALANCE-" . $comentario) comment="!== VRF LOAD_BALANCE_DINAMICO"
+:delay 2
+/ip route add gateway=$gateway routing-table=("BALANCE-" . $comentario) comment=("!== ROTA DO BALANCE | ".$comentario)
+
+/ip firewall mangle
+add action=mark-routing chain=prerouting comment=("!== MARCA DE ROTEAMENTO | ".$comentario) connection-mark=("conexao-".$comentario) dst-address-list=!rede-local-geral new-routing-mark=("BALANCE-" . $comentario) passthrough=no src-address-list=rede-local-privada
+}
+
+
+/ip firewall mangle 
+
+:if ([print count-only] = 0)  do={
+add action=jump chain=prerouting comment="!== JUMP PARA PCC DINAMICO" connection-mark=no-mark connection-state=new dst-address-list=!rede-local-geral jump-target=pcc-dinamico src-address-list=rede-local-privada
+} else={
+print
+add action=jump chain=prerouting comment="!== JUMP PARA PCC DINAMICO" connection-mark=no-mark connection-state=new dst-address-list=!rede-local-geral jump-target=pcc-dinamico src-address-list=rede-local-privada place-before=0
+}
+
+
+#===============================================================================================
+#======== ADICIONA O SCRIPT DE LOADBALANCE                                          
+#===============================================================================================
+/system script
+add name=LOAD_BALANCE_DINAMICO source="#=========\
+    ======================================================================================\r\
+    \n#          TIPO DE  PCC, USE src-address: ou both-addresses:                                    \r\
+    \n#===============================================================================================\r\
+    \n\r\
+    \n:global tipopcc src-address:\r\
+    \n\r\
+    \n#===============================================================================================\r\
+    \n#              CALCULA NUMERO DE REGRAS PARA PCC                                                \r\
+    \n#===============================================================================================\r\
+    \n\r\
+    \n:global numregraspcc 0 \r\
+    \n:foreach i in=[/ip route find  dst-address=0.0.0.0/0 routing-table=main disabled=no ] do={\r\
+    \n:global peso [pick [/ip route get number=\$i comment] ([ find  [/ip route get number=\$i comment ]  \"#\"]+1) 100]\r\
+    \n:global numregraspcc (\$numregraspcc+\$peso) \r\
+    \n}\r\
+    \n\r\
+    \n#===============================================================================================\r\
+    \n#                      CRIA REGRAS DO PCC                                                       \r\
+    \n#===============================================================================================\r\
+    \n\r\
+    \n\r\
+    \n/ip firewall mangle remove [find comment~\"!== MARCA DE CONEXAO\"]\r\
+    \n\r\
+    \n:global restomax (\$numregraspcc-1)\r\
+    \n:global resto 0\r\
+    \n:foreach i in=[/ip route find  dst-address=0.0.0.0/0 routing-table=main disabled=no ] do={\r\
+    \n\r\
+    \n:global comentario [/ip route get number=\$i comment]\r\
+    \n:global link \$comentario\r\
+    \n:global peso [pick [/ip route get number=\$i comment] ([ find  [/ip route get number=\$i comment ]  \"#\"]+1) 100]\r\
+    \n:for rota from=1 to=\$peso do={:if (\$restomax >= \$resto) do={\r\
+    \n/ip firewall mangle\r\
+    \nadd action=mark-connection chain=pcc-dinamico new-connection-mark=(\"conexao-\".\$link) passthrough=yes per-connection-classifier=(\$tipopcc.\
+    \$numregraspcc.\"/\".\$resto) comment=(\"!== MARCA DE CONEXAO PARA PCC \".\$numregraspcc.\"/\".\$resto.\" ==> \".\$link)\r\
+    \n\r\
+    \n:global resto (\$resto+1)\r\
+    \n\r\
+    \n}\r\
+    \n}\r\
+    \n}\r\
+    \n"
