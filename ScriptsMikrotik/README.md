@@ -165,6 +165,3 @@ Suporte Técnico Junior
 
 Este repositório é destinado ao uso interno da equipe **PaerroTech**.  
 O uso externo deve ser previamente autorizado.
-
-Só falar 👍
-````
