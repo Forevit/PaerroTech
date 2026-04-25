@@ -41,7 +41,7 @@ O script executa diversas configurações essenciais de forma automatizada, redu
 ### 🔹 Execução remota
 
 ```powershell
-irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Padronizacao-Maquinas/padronizacao.ps1 | iex
+irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/PadronizacaoMaquinas/padronizacao.ps1 | iex
 ````
 
 > ⚠️ Executar como administrador
@@ -53,7 +53,7 @@ irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Padronizacao-Maqui
 
 ```powershell
 git clone https://github.com/Forevit/PaerroTech.git
-cd PaerroTech/Padronizacao-Maquinas
+cd PaerroTech/PadronizacaoMaquinas
 .\padronizacao.ps1
 ```
 
