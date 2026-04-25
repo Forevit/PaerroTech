@@ -1,35 +1,63 @@
-# 🔧 PaerroTech
+# 📜 Scripts
 
-Scripts e automações para padronização de máquinas corporativas.
+<p align="center">
+  <b>Utilitários • Diagnóstico • Ferramentas rápidas</b><br>
+  Scripts auxiliares para o dia a dia do suporte técnico
+</p>
 
----
-
-## 📌 Sobre o projeto
-
-O **PaerroTech** é um projeto voltado para automação de processos de suporte técnico, com foco em **padronização de ambientes Windows corporativos**.
-
-O script principal executa uma sequência completa de configuração da máquina, incluindo ingresso em domínio, instalação de softwares, drivers, Office e integração com ferramentas de inventário.
-
----
-
-## ⚙️ Funcionalidades
-
-- Ingresso automático no domínio
-- Definição de hostname
-- Criação e configuração do administrador local
-- Instalação de softwares essenciais via Winget
-- Instalação do GLPI Agent
-- Instalação do Microsoft Office (ODT)
-- Instalação de drivers por fabricante (Dell, Lenovo, HP)
-- Windows Update em background
-- Sistema de logs detalhado
-- Execução por etapas com retomada automática após reboot
+<p align="center">
+  <img src="https://img.shields.io/badge/Status-Em%20Construção-yellow">
+  <img src="https://img.shields.io/badge/Tipo-Utilitário-blue">
+  <img src="https://img.shields.io/badge/Uso-Sob%20Demanda-orange">
+  <img src="https://img.shields.io/badge/PowerShell-Scripts-0078D6">
+</p>
 
 ---
 
-## 🚀 Execução
+## 📌 Visão Geral
 
-### 🔹 Execução remota (recomendado)
+A pasta **Scripts** será destinada a utilitários e ferramentas rápidas para suporte técnico, diagnóstico e automações pontuais.
+
+---
+
+## 🚧 Status
+
+🚀 Em construção  
+
+Novos scripts serão adicionados conforme necessidade da equipe.
+
+---
+
+## 🧠 Objetivo
+
+Centralizar scripts úteis para:
+
+- 🔍 Diagnóstico de problemas  
+- ⚡ Execução de tarefas rápidas  
+- 🛠️ Suporte técnico no dia a dia  
+- 📊 Coleta de informações  
+
+---
+
+## 🚀 Como utilizar
 
 ```powershell
-irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/padronizacao.ps1 | iex
+cd Scripts
+.\nome-do-script.ps1
+````
+
+---
+
+## ⚠️ Boas práticas
+
+* Executar como administrador (quando necessário)
+* Validar scripts antes do uso
+* Evitar execução em produção sem análise
+
+---
+
+## 👨‍💻 Responsável
+
+**Eduardo Ferreira**
+
+Suporte Técnico Júnior

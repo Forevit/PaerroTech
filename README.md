@@ -46,8 +46,6 @@ Este ambiente reúne scripts utilizados no dia a dia para:
 ├── 📁 Padronizacao-Maquinas/   → Setup completo de estações
 ├── 📁 Preventivas/             → Rotinas de manutenção
 ├── 📁 Scripts/                 → Utilitários diversos
-├── 📁 Automacoes/              → Integrações e fluxos
-├── 📁 Rede/                    → Ferramentas de diagnóstico
 └── README.md
 
 ````
@@ -59,7 +57,7 @@ Este ambiente reúne scripts utilizados no dia a dia para:
 ### 🔹 Execução remota (rápida)
 
 ```powershell
-irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/<script>.ps1 | iex
+irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/<folder>/<script>.ps1 | iex
 ````
 
 > ⚠️ Executar como administrador
