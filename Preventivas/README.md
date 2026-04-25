@@ -1,6 +1,5 @@
 # 🛠️ README — Preventivas
 
-````markdown
 # 🛠️ Preventivas
 
 <p align="center">
@@ -108,5 +107,3 @@ Preventivas/
 **Eduardo Ferreira**
 
 Suporte Técnico Júnior
-
-````
