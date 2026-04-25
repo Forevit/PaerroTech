@@ -45,7 +45,7 @@ Essas rotinas são fundamentais para:
 ### 🔹 Execução remota
 
 ```powershell
-irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Preventivas/<script>.ps1 | iex
+irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Preventivas/preventiva.ps1 | iex
 ````
 
 ---
