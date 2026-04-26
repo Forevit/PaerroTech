@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://i.ibb.co/RTBYBbDS/5e2b94a7-ee3e-4022-aa2b-cc17b93bc5f3.jpg" width="800">
+</p>
+
 # 🏢 PaerroTech
 
 <p align="center">
