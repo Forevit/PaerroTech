@@ -10,7 +10,6 @@ if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:
 }
 
 # ── Sistema de Logs ──────────────────────────────────────────
-# Pasta raiz compartilhada — usada por todos os scripts (preventivas, padronização, etc.)
 # Estrutura: C:\Users\Public\Documents\Logs\
 #   ├── Padronizacao\     ← logs deste script
 #   ├── Preventiva\       ← logs de scripts de manutenção preventiva
@@ -51,6 +50,7 @@ function Write-LogErro {
 }
 
 # ── Barra de progresso ───────────────────────────────────────
+# ⚠️  Atualize este número sempre que adicionar/remover uma etapa numerada
 $totalEtapas = 6
 
 function Update-Progresso {
@@ -66,7 +66,6 @@ function Update-Progresso {
 $regPath  = "HKLM:\SOFTWARE\Padronizacao"
 $credFile = "$env:ProgramData\paerro_cred.xml"
 
-# Resolve o caminho real do executável (.exe ou .ps1) independente de onde está
 $scriptPath = if ($MyInvocation.MyCommand.Path) {
     $MyInvocation.MyCommand.Path
 } else {
@@ -117,7 +116,7 @@ function Set-DadoSalvo($chave, $valor) {
 
 # ── Detecção de fabricante + drivers ─────────────────────────
 function Install-Drivers {
-    $fabricante = (Get-WmiObject Win32_ComputerSystem).Manufacturer
+    $fabricante = (Get-CimInstance Win32_ComputerSystem).Manufacturer
     Write-Log "Fabricante detectado: $fabricante" "INFO"
 
     switch -Wildcard ($fabricante.ToLower()) {
@@ -195,6 +194,24 @@ function Get-ProximoHostnameLDAP {
     }
 }
 
+# ── Validação de hostname ────────────────────────────────────
+function Assert-HostnameValido {
+    param([string]$Hostname)
+    if ([string]::IsNullOrWhiteSpace($Hostname)) {
+        Write-Log "Hostname não pode ser vazio." "ERRO"; return $false
+    }
+    if ($Hostname.Length -gt 15) {
+        Write-Log "Hostname '$Hostname' excede 15 caracteres (limite NetBIOS)." "ERRO"; return $false
+    }
+    if ($Hostname -notmatch '^[a-zA-Z0-9\-]+$') {
+        Write-Log "Hostname '$Hostname' contém caracteres inválidos. Use apenas letras, números e hífen." "ERRO"; return $false
+    }
+    if ($Hostname -match '^-|-$') {
+        Write-Log "Hostname '$Hostname' não pode começar ou terminar com hífen." "ERRO"; return $false
+    }
+    return $true
+}
+
 # ── Lê etapa atual ───────────────────────────────────────────
 $etapaAtual = Get-Etapa
 
@@ -208,6 +225,62 @@ Write-Log "Log salvo em: $logFile" "INFO"
 
 if ($etapaAtual -gt 0) {
     Write-Log "Retomando a partir da etapa $etapaAtual após reboot." "AVISO"
+}
+
+# ============================================================
+# PRÉ-VERIFICAÇÃO — EDIÇÃO DO WINDOWS
+# Roda apenas uma vez, antes de qualquer etapa numerada.
+# Se o Windows for Home, pausa para o técnico fazer o upgrade,
+# configura RunOnce e sai — o script retoma automaticamente
+# após o reboot causado pelo upgrade.
+# ============================================================
+$upgradeVerificado = Get-DadoSalvo "UpgradeVerificado"
+
+if ($etapaAtual -lt 1 -and $upgradeVerificado -ne "1") {
+
+    $edicao = (Get-CimInstance Win32_OperatingSystem).Caption
+    Write-Log "Edição detectada: $edicao" "INFO"
+
+    if ($edicao -like "*Home*") {
+        Write-Log "Windows Home detectado. Upgrade para Pro necessário antes de continuar." "AVISO"
+
+        Write-Host "`n============================================" -ForegroundColor Yellow
+        Write-Host "   ATENÇÃO — WINDOWS HOME DETECTADO" -ForegroundColor Yellow
+        Write-Host "============================================" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  Esta máquina está com Windows Home." -ForegroundColor White
+        Write-Host "  É necessário fazer o upgrade para Pro" -ForegroundColor White
+        Write-Host "  antes de continuar a padronização." -ForegroundColor White
+        Write-Host ""
+        Write-Host "  Após concluir o upgrade, a máquina vai" -ForegroundColor Gray
+        Write-Host "  reiniciar e o script continuará sozinho." -ForegroundColor Gray
+        Write-Host "============================================`n" -ForegroundColor Yellow
+
+        # Salva flag e configura RunOnce ANTES de abrir a ferramenta,
+        # garantindo retomada mesmo que o reboot seja imediato.
+        Set-DadoSalvo "UpgradeVerificado" "1"
+        Set-DadoSalvo "ScriptPath"        $scriptPath
+        Set-RunOnce
+        Write-Log "RunOnce configurado. Script retomará após reboot do upgrade." "INFO"
+
+        Write-Host "  Pressione qualquer tecla para abrir a ferramenta de upgrade..." -ForegroundColor Cyan
+        pause
+
+        # ====================================================
+        # INSIRA AQUI o comando de upgrade Home → Pro
+        # ====================================================
+
+        # Mantém o script aberto enquanto o técnico age.
+        # Se o upgrade reiniciar a máquina, o RunOnce já está configurado.
+        Write-Host "`n  Aguardando conclusão do upgrade..." -ForegroundColor Yellow
+        Write-Host "  (se a máquina reiniciar, o script continuará automaticamente)" -ForegroundColor Gray
+        pause
+        Exit
+
+    } else {
+        Write-Log "Edição OK: $edicao. Prosseguindo." "OK"
+        Set-DadoSalvo "UpgradeVerificado" "1"
+    }
 }
 
 # ============================================================
@@ -259,7 +332,6 @@ if ($etapaAtual -lt 1) {
         if ($opcaoCliente -ne "0" -and $clientes.ContainsKey([int]$opcaoCliente)) {
             $clienteSelecionado = $clientes[[int]$opcaoCliente]
 
-            # ── Seleção de tipo de máquina ───────────────────
             Write-Host "`nTipo de máquina:`n" -ForegroundColor Yellow
             Write-Host "  [1] Notebook  ($($clienteSelecionado.Base)NTB****)" -ForegroundColor White
             Write-Host "  [2] Desktop   ($($clienteSelecionado.Base)DSK****)`n" -ForegroundColor White
@@ -299,12 +371,19 @@ if ($etapaAtual -lt 1) {
 
         # ── Confirmação ou digitação manual do hostname ──────
         Write-Host ""
-        if ($hostnameSugerido) {
-            $confirmacao = Read-Host "Usar '$hostnameSugerido'? (Enter para confirmar ou digite outro)"
-            $novoHostname = if ([string]::IsNullOrWhiteSpace($confirmacao)) { $hostnameSugerido } else { $confirmacao }
-        } else {
-            $novoHostname = Read-Host "Digite o hostname da máquina"
-        }
+        do {
+            if ($hostnameSugerido) {
+                $confirmacao  = Read-Host "Usar '$hostnameSugerido'? (Enter para confirmar ou digite outro)"
+                $novoHostname = if ([string]::IsNullOrWhiteSpace($confirmacao)) { $hostnameSugerido } else { $confirmacao }
+            } else {
+                $novoHostname = Read-Host "Digite o hostname da máquina"
+            }
+            $hostnameValido = Assert-HostnameValido $novoHostname
+            if (-not $hostnameValido) {
+                Write-Host "  Tente novamente." -ForegroundColor Yellow
+                $hostnameSugerido = $null
+            }
+        } while (-not $hostnameValido)
 
         # ── Dados do domínio ─────────────────────────────────
         $dominio  = Read-Host "Digite o nome do domínio (ex: empresa.local)"
@@ -313,10 +392,6 @@ if ($etapaAtual -lt 1) {
 
         $credencial = New-Object System.Management.Automation.PSCredential($domAdmin, $domPass)
 
-        # ✅ Credencial salva criptografada via DPAPI — sem texto plano em nenhum lugar
-        $credencial | Export-Clixml -Path $credFile -Force
-        Write-Log "Credencial salva de forma segura (DPAPI) em $credFile" "INFO"
-
         Set-DadoSalvo "Hostname"   $novoHostname
         Set-DadoSalvo "Dominio"    $dominio
         Set-DadoSalvo "ScriptPath" $scriptPath
@@ -324,10 +399,13 @@ if ($etapaAtual -lt 1) {
         Add-Computer -DomainName $dominio -Credential $credencial -NewName $novoHostname -Force -ErrorAction Stop
         Write-Log "Máquina '$novoHostname' adicionada ao domínio '$dominio'." "OK"
 
+        $credencial = $null
+        $domPass    = $null
+        [System.GC]::Collect()
+
     } catch {
         Write-LogErro "Falha ao ingressar no domínio ou definir hostname." $_
         Write-Log "Verifique as credenciais e a conectividade com o domínio." "AVISO"
-        Remove-Item $credFile -Force -ErrorAction SilentlyContinue
         pause; Exit
     }
 
@@ -339,24 +417,41 @@ if ($etapaAtual -lt 1) {
     Exit
 }
 
-# ── Recupera dados e apaga credencial imediatamente após leitura ──
+# ── Recupera dados salvos ────────────────────────────────────
 $novoHostname = Get-DadoSalvo "Hostname"
 $dominio      = Get-DadoSalvo "Dominio"
 
 if (Test-Path $credFile) {
-    Write-Log "Credencial de domínio recuperada e removida do disco." "INFO"
+    Write-Log "Arquivo de credencial legado encontrado e removido." "AVISO"
     Remove-Item $credFile -Force -ErrorAction SilentlyContinue
 }
 
 # ============================================================
-# ETAPA 2 — USUÁRIO ADMINISTRADOR LOCAL (conta padrão)
+# ETAPA 2 — USUÁRIO ADMINISTRADOR LOCAL
 # ============================================================
 if ($etapaAtual -lt 2) {
     Update-Progresso 2 "Habilitando Conta Administrador Local"
     Write-Log "ETAPA 2 — Habilitando Conta Administrador Local" "ETAPA"
 
     try {
-        $adminPass = Read-Host "Defina a senha para a conta Administrador" -AsSecureString
+        do {
+            $adminPass        = Read-Host "Defina a senha para a conta Administrador" -AsSecureString
+            $adminPassConfirm = Read-Host "Confirme a senha"                          -AsSecureString
+
+            $pass1 = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                         [Runtime.InteropServices.Marshal]::SecureStringToBSTR($adminPass))
+            $pass2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                         [Runtime.InteropServices.Marshal]::SecureStringToBSTR($adminPassConfirm))
+
+            if ($pass1 -ne $pass2) {
+                Write-Log "As senhas não coincidem. Tente novamente." "AVISO"
+            }
+        } while ($pass1 -ne $pass2)
+
+        $pass1 = $null
+        $pass2 = $null
+        [System.GC]::Collect()
+
         Enable-LocalUser -Name "Administrador" -ErrorAction Stop
         Set-LocalUser    -Name "Administrador" -Password $adminPass -PasswordNeverExpires $true -ErrorAction Stop
         Write-Log "Conta 'Administrador' habilitada e senha definida." "OK"
@@ -450,9 +545,25 @@ if ($etapaAtual -lt 5) {
         $odtDir = "$env:TEMP\ODT"
         New-Item -ItemType Directory -Path $odtDir -Force | Out-Null
 
-        $odtUrl = "https://download.microsoft.com/download/2/7/A/27AF1BE6-DD20-4CB4-B154-EBAB8A7D4A7E/officedeploymenttool_18129-20030.exe"
-        $odtExe = "$odtDir\odt.exe"
+        Write-Log "Buscando URL mais recente do Office Deployment Tool..." "INFO"
+        try {
+            $odtPage     = Invoke-WebRequest -Uri "https://www.microsoft.com/en-us/download/details.aspx?id=49117" `
+                               -UseBasicParsing -ErrorAction Stop
+            $odtUrlMatch = [regex]::Match($odtPage.Links.href -join "`n",
+                               'https://download\.microsoft\.com/download/[^\s"]+officedeploymenttool[^\s"]+\.exe')
 
+            if ($odtUrlMatch.Success) {
+                $odtUrl = $odtUrlMatch.Value
+                Write-Log "URL do ODT encontrada: $odtUrl" "INFO"
+            } else {
+                throw "Não foi possível extrair a URL do ODT da página da Microsoft."
+            }
+        } catch {
+            $odtUrl = "https://download.microsoft.com/download/2/7/A/27AF1BE6-DD20-4CB4-B154-EBAB8A7D4A7E/officedeploymenttool_18129-20030.exe"
+            Write-Log "Falha ao buscar URL dinâmica. Usando URL de fallback." "AVISO"
+        }
+
+        $odtExe = "$odtDir\odt.exe"
         Write-Log "Baixando Office Deployment Tool..." "INFO"
         Invoke-WebRequest -Uri $odtUrl -OutFile $odtExe -UseBasicParsing -ErrorAction Stop
         Start-Process $odtExe -ArgumentList "/quiet /extract:`"$odtDir`"" -Wait
@@ -486,7 +597,6 @@ if ($etapaAtual -lt 5) {
         Write-LogErro "Falha ao instalar o Microsoft Office." $_
     }
 
-    # ── Drivers do fabricante ────────────────────────────────
     Write-Log "Detectando fabricante para instalação de drivers..." "INFO"
     try {
         Install-Drivers
@@ -498,33 +608,37 @@ if ($etapaAtual -lt 5) {
 }
 
 # ============================================================
-# ETAPA 6 — ATIVAÇÃO VIA MASSGRAVE (Windows + Office)
+# ETAPA 6 — ATIVAÇÃO
 # ============================================================
 if ($etapaAtual -lt 6) {
-    Update-Progresso 6 "Ativação via MAS"
-    Write-Log "ETAPA 6 — Ativação via MAS (Massgrave)" "ETAPA"
+    Update-Progresso 6 "Ativação"
+    Write-Log "ETAPA 6 — Ativação" "ETAPA"
 
-    try {
-        Write-Log "Abrindo ativador MAS..." "INFO"
-        irm https://get.activated.win | iex
-        Write-Log "MAS executado. Verifique se a ativação foi concluída." "OK"
-    } catch {
-        Write-LogErro "Falha ao executar o MAS." $_
-    }
+    # =========================================================
+    # INSIRA AQUI o comando de ativação
+    # =========================================================
+
+    Write-Log "Etapa de ativação pendente de configuração." "AVISO"
 
     Set-Etapa 6
 }
 
 # ============================================================
-# AGUARDA O JOB DO WINDOWS UPDATE
+# AGUARDA O JOB DO WINDOWS UPDATE (timeout: 30 minutos)
 # ============================================================
 Write-Log "Verificando status do Windows Update em background..." "INFO"
 $wuJobs = Get-Job -State Running -ErrorAction SilentlyContinue | Where-Object { $_.Command -like "*WindowsUpdate*" }
 if ($wuJobs) {
-    Write-Log "Windows Update ainda em execução. Aguardando conclusão..." "AVISO"
-    $wuJobs | Wait-Job | Out-Null
-    $wuJobs | Receive-Job | Out-File -FilePath $logFile -Append -Encoding UTF8
-    Write-Log "Windows Update concluído." "OK"
+    Write-Log "Windows Update ainda em execução. Aguardando (timeout: 30 min)..." "AVISO"
+    $concluido = $wuJobs | Wait-Job -Timeout 1800
+    if ($concluido) {
+        $wuJobs | Receive-Job | Out-File -FilePath $logFile -Append -Encoding UTF8
+        Write-Log "Windows Update concluído." "OK"
+    } else {
+        Write-Log "Windows Update não concluiu no tempo limite. Verifique o Job manualmente (Get-Job)." "AVISO"
+        $wuJobs | Stop-Job
+        $wuJobs | Remove-Job
+    }
 } else {
     Write-Log "Windows Update já finalizado ou não iniciado nesta sessão." "INFO"
 }
