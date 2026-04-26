@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 🏢 PaerroTech
 
 <p align="center">
@@ -113,7 +112,6 @@ irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/PadronizacaoMaquin
 
 > ⚠️ Executar como administrador
 > ⚠️ Utilizar apenas em ambiente corporativo confiável
->>>>>>> dc51c9c (add validacao versao Windows)
 
 ---
 
@@ -177,12 +175,10 @@ Logs/
 git clone https://github.com/Forevit/PaerroTech.git
 cd PaerroTech/PadronizacaoMaquinas
 .\padronizacao.ps1
->>>>>>> dc51c9c (add validacao versao Windows)
 ```
 
 ---
 
-<<<<<<< HEAD
 ## 🛠️ Padrão de desenvolvimento
 
 Scripts devem seguir:
@@ -222,13 +218,11 @@ Contêm:
 * Status de execução
 * Erros detalhados
 * Saída de comandos
->>>>>>> dc51c9c (add validacao versao Windows)
 
 ---
 
 ## 🔐 Segurança
 
-<<<<<<< HEAD
 * ❌ Nunca salvar senhas em texto plano
 * ✔ Utilizar métodos seguros (DPAPI)
 * ✔ Validar scripts antes da execução
@@ -295,12 +289,10 @@ Paerro-Setup.exe (opcional)
 ---
 
 ## 👨‍💻 Responsável
->>>>>>> dc51c9c (add validacao versao Windows)
 
 **Eduardo Ferreira**
 
 Suporte Técnico Junior
-<<<<<<< HEAD
 
 ---
 
@@ -309,4 +301,3 @@ Suporte Técnico Junior
 Este repositório é destinado ao uso interno da equipe PaerroTech.
 O uso externo deve ser previamente autorizado.
 =======
->>>>>>> dc51c9c (add validacao versao Windows)
