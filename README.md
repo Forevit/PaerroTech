@@ -1,107 +1,182 @@
-# 🛠️ Preventivas
+# 🧪 PaerroTech - Ambiente de Teste
 
 <p align="center">
-  <b>Manutenção • Estabilidade • Performance</b><br>
-  Rotinas automatizadas para saúde do ambiente corporativo
+  <b>Automação • Padronização • Infraestrutura</b><br>
+  Ambiente de validação de scripts antes de produção
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Status-Ativo-green">
-  <img src="https://img.shields.io/badge/Tipo-Manutenção-blue">
-  <img src="https://img.shields.io/badge/Execução-Periódica-orange">
-  <img src="https://img.shields.io/badge/PowerShell-Automation-0078D6">
+  <img src="https://img.shields.io/badge/Status-Em%20Teste-yellow">
+  <img src="https://img.shields.io/badge/PowerShell-Automation-blue">
+  <img src="https://img.shields.io/badge/Windows-Suporte-0078D6">
+  <img src="https://img.shields.io/badge/Branch-ambienteTeste-lightgrey">
 </p>
 
 ---
 
 ## 📌 Visão Geral
 
-A pasta **Preventivas** contém scripts responsáveis por manter as máquinas corporativas atualizadas, limpas e operando com máximo desempenho.
+Este branch **`ambienteTeste`** faz parte do repositório **PaerroTech** e é destinado exclusivamente para testes e validação de scripts de automação antes da publicação em produção.
 
-Essas rotinas são fundamentais para:
+Aqui são realizados testes de:
 
-- 🔧 Reduzir falhas e incidentes
-- ⚡ Melhorar desempenho das máquinas
-- 🔒 Garantir segurança e atualizações
-- 📉 Diminuir volume de chamados
+- 🖥️ Scripts de padronização de máquinas
+- 🔧 Rotinas de manutenção preventiva
+- ⚙️ Automação de tarefas de suporte
+- 🌐 Ajustes e validações de rede
+- 📦 Scripts experimentais
 
 ---
 
-## ⚙️ O que os scripts fazem
+## 🧭 Navegação
 
-- 🔄 Windows Update automático  
-- 🧩 Atualização de drivers  
-- 📦 Atualização de softwares via Winget  
-- 🧹 Limpeza de disco e arquivos temporários  
-- 👤 Remoção de perfis antigos  
-- 🔍 Verificação de softwares essenciais  
-- ☕ Atualização do Java  
-- ⚙️ Ajustes básicos de sistema  
+- [📂 Estrutura](#-estrutura-do-repositório)
+- [🚀 Como usar](#-como-utilizar)
+- [⚙️ Filosofia](#-filosofia-do-ambiente)
+- [🧠 Boas práticas](#-boas-práticas)
+- [🔐 Segurança](#-segurança)
+- [📈 Evolução](#-evolução)
+
+---
+
+## 🗂️ Estrutura do Repositório
+
+```
+
+📁 PaerroTech
+├── 📁 Padronizacao-Maquinas/
+├── 📁 Preventivas/
+│   └── 📁 ambienteTeste/   → Scripts em validação
+├── 📁 ScriptsMikrotik/
+├── 📁 Scripts/
+└── README.md
+
+````
 
 ---
 
 ## 🚀 Como utilizar
 
-### 🔹 Execução remota
+### 🔹 Execução via Git
 
-```powershell
-irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Preventivas/<script>.ps1 | iex
+```bash
+git clone https://github.com/Forevit/PaerroTech.git
+cd PaerroTech
+git checkout ambienteTeste
 ````
 
 ---
 
-### 🔹 Execução local
+### 🔹 Execução de scripts PowerShell
 
 ```powershell
-cd Preventivas
-.\preventiva.ps1
+Set-ExecutionPolicy Bypass -Scope Process -Force
+
+.\nome-do-script.ps1
 ```
 
-## 📝 Logs
-
-Os logs seguem o padrão:
-
-```
-C:\Users\Public\Documents\Logs\Preventiva\
-```
-
-📌 Incluem:
-
-* Status da execução
-* Ações realizadas
-* Possíveis erros
+> ⚠️ Sempre executar como Administrador
 
 ---
 
-## ⚠️ Boas práticas
+## ⚙️ Filosofia do ambiente
 
-* ✔ Executar como administrador
-* ✔ Rodar fora do horário crítico
-* ✔ Validar scripts antes de produção
-* ❌ Evitar execução manual desnecessária
+Este branch segue três princípios:
+
+### ⚡ Teste seguro
+
+Validação de scripts antes de produção
+
+### 📏 Controle de mudanças
+
+Evitar impactos em máquinas reais
+
+### 🔒 Isolamento
+
+Ambiente separado do fluxo principal
+
+---
+
+## 🧠 Boas práticas
+
+* ✔ Testar antes de promover para produção
+* ✔ Usar logs durante execução
+* ✔ Documentar alterações feitas
+* ✔ Manter scripts organizados por função
+* ❌ Evitar execução em máquinas críticas
+
+---
+
+## 📝 Padrão de logs
+
+Os testes devem registrar logs em:
+
+```
+C:\Users\Public\Documents\Logs\
+```
+
+Estrutura recomendada:
+
+```
+Logs/
+ ├── Preventiva/
+ ├── Testes/
+ └── Debug/
+```
+
+---
+
+## 🛠️ Padrão de desenvolvimento
+
+Scripts neste ambiente devem conter:
+
+* ✔ Nome claro e descritivo
+* ✔ Comentários no código
+* ✔ Tratamento de erro (`try/catch`)
+* ✔ Registro de logs
+* ✔ Execução segura e validada
 
 ---
 
 ## 🔐 Segurança
 
-* Scripts não armazenam credenciais
-* Execução controlada e segura
-* Sem uso de dados sensíveis
+* ❌ Não usar credenciais hardcoded
+* ✔ Validar antes de executar em produção
+* ✔ Utilizar apenas fontes internas confiáveis
+* ❌ Evitar scripts externos sem revisão
 
 ---
 
-## 📂 Estrutura esperada
+## 📈 Evolução
 
-```
-Preventivas/
- ├── preventiva.ps1
- └── README.md
-```
+Este ambiente é temporário e serve como etapa de validação.
+
+Futuras melhorias planejadas:
+
+* 📦 Pipeline de CI/CD para scripts PowerShell
+* 🧪 Testes automatizados de scripts
+* 📊 Relatórios de execução
+* 🚀 Promoção automática para produção
 
 ---
 
-## 👨‍💻 Responsável
+## 🤝 Contribuição
+
+1. Criar branch baseada em `ambienteTeste`
+2. Realizar testes locais
+3. Validar execução
+4. Abrir Pull Request para `main`
+
+---
+
+## 👨‍💻 Autor
 
 **Eduardo Ferreira**
 
-Suporte Técnico Júnior
+Equipe de Suporte Técnico - PaerroTech
+
+---
+
+## ⚠️ Uso interno
+
+Este ambiente é exclusivamente interno e destinado apenas para testes controlados de automação.
