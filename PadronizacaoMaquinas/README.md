@@ -58,7 +58,7 @@ Este ambiente reúne scripts utilizados no dia a dia para:
 ### 🔹 Execução remota (rápida)
 
 ```powershell
-irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/<folder>/<script>.ps1 | iex
+irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/PadronizacaoMaquinas/padronizacao.ps1 | iex
 ````
 
 > ⚠️ Executar como administrador
