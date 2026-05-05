@@ -63,7 +63,7 @@ irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/<folder>/<script>.
 
 > ⚠️ Executar como administrador
 > ⚠️ Utilize apenas scripts confiáveis
-=======
+
 # 🖥️ Padronização de Máquinas
 
 Scripts responsáveis pela preparação completa de estações de trabalho em ambiente corporativo.
@@ -95,30 +95,16 @@ O script executa diversas configurações essenciais de forma automatizada, redu
 - Instalação de drivers por fabricante:
   - Dell
   - Lenovo
-  - HP
 - Execução de Windows Update em segundo plano
 - Sistema de logs detalhado
 - Execução por etapas com retomada automática após reboot
 
 ---
 
-## 🚀 Como executar
-
-### 🔹 Execução remota
-
-```powershell
-irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/PadronizacaoMaquinas/padronizacao.ps1 | iex
-````
-
-> ⚠️ Executar como administrador
-> ⚠️ Utilizar apenas em ambiente corporativo confiável
-
----
-
 ### 🔹 Execução local
 
-<<<<<<< HEAD
-```bash
+
+```
 git clone https://github.com/Forevit/PaerroTech.git
 cd PaerroTech
 ```
@@ -188,7 +174,7 @@ Scripts devem seguir:
 * ✔ Tratamento de erro (`try/catch`)
 * ✔ Sistema de logs
 * ✔ Execução segura
-=======
+
 ## 🔄 Fluxo de execução
 
 O script é dividido em etapas:
@@ -300,4 +286,3 @@ Suporte Técnico Junior
 
 Este repositório é destinado ao uso interno da equipe PaerroTech.
 O uso externo deve ser previamente autorizado.
-=======
