@@ -1,839 +1,759 @@
-# ============================================================
-#  PREVENTIVA CORPORATIVA - PADRONIZAÇÃO DE MÁQUINA
-#  By Eduardo Ferreira
-#  v2.0 — TUI, DryRun, Runspaces, Segurança, Inventário
-# ============================================================
+<#
+============================================================
+ SCRIPT DE PADRONIZAÇÃO DE MÁQUINA CORPORATIVA
+ Projeto: PaerroTech
+ Autor: Eduardo Ferreira
+ Versão: 3.0-refactor
 
+ Objetivo:
+ - Padronizar máquinas Windows 10/11 Pro
+ - Reduzir falhas em execução remota via irm | iex
+ - Permitir retomada após reboot usando cópia local do script
+ - Melhorar logs, validações, Winget, GLPI Agent, Office e drivers
+============================================================
+#>
+
+#Requires -Version 5.1
+
+[CmdletBinding()]
 param(
-    [string]$Cliente    = "",
-    [string]$Tecnico    = "",
-    [switch]$Silent,
-    [switch]$DryRun,
-    [switch]$SkipUpdates,
-    [switch]$SkipCleaning
+    [switch]$SkipDomainJoin,
+    [switch]$SkipOffice,
+    [switch]$SkipDrivers,
+    [switch]$SkipWindowsUpdate,
+    [switch]$SkipGLPI,
+    [switch]$SkipApps,
+    [switch]$ResetState
 )
 
-# ── Auto-elevação ────────────────────────────────────────────
-if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")) {
-    $args = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    if ($Cliente)     { $args += " -Cliente `"$Cliente`"" }
-    if ($Tecnico)     { $args += " -Tecnico `"$Tecnico`"" }
-    if ($Silent)      { $args += " -Silent" }
-    if ($DryRun)      { $args += " -DryRun" }
-    if ($SkipUpdates) { $args += " -SkipUpdates" }
-    if ($SkipCleaning){ $args += " -SkipCleaning" }
-    Start-Process PowerShell -Verb RunAs $args
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+# ============================================================
+# CONFIGURAÇÕES GERAIS
+# ============================================================
+$Config = [ordered]@{
+    ProjectName       = 'PaerroTech - Padronização Corporativa'
+    RegPath           = 'HKLM:\SOFTWARE\PaerroTech\Padronizacao'
+    RunOncePath       = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce'
+    RunOnceName       = 'PaerroTechPadronizacao'
+    BaseDir           = "$env:ProgramData\PaerroTech\Padronizacao"
+    LogRoot           = 'C:\Users\Public\Documents\Logs\Padronizacao'
+    LocalScriptPath   = "$env:ProgramData\PaerroTech\Padronizacao\padronizacao.ps1"
+    GLPIServer        = 'https://suporte.paerro.tech/front/inventory.php'
+    GLPIAgentVersion  = '1.17'
+    OfficeC2RUrl       = 'https://c2rsetup.officeapps.live.com/c2r/download.aspx?ProductreleaseID=O365ProPlusRetail&platform=x64&language=pt-br&version=O16GA'
+    OfficeLanguage    = 'pt-br'
+    TotalSteps        = 8
+}
+
+$DominiosClientes = [ordered]@{
+    'apoio.local'     = @{ Nome = 'GrupoApoioCob';         Base = 'GAPC'; DominioLDAP = 'DC=apoio,DC=local' }
+    'locus.local'     = @{ Nome = 'GrupoLocusEmpresarial'; Base = 'GLHE'; DominioLDAP = 'DC=locus,DC=local' }
+    'topclean.local'  = @{ Nome = 'GrupoTopClean';         Base = 'GTPC'; DominioLDAP = 'DC=topclean,DC=local' }
+    'gesquadra.local' = @{ Nome = 'GrupoEsquadra';         Base = 'GESQ'; DominioLDAP = 'DC=gesquadra,DC=local' }
+    'gesquadra.com'   = @{ Nome = 'GrupoEsquadra';         Base = 'GESQ'; DominioLDAP = 'DC=gesquadra,DC=com' }
+}
+
+$TiposMaquina = [ordered]@{
+    '1' = @{ Label = 'Notebook'; Sufixo = 'NTB' }
+    '2' = @{ Label = 'Desktop';  Sufixo = 'DSK' }
+}
+
+$AppsWinget = @(
+    @{ Id = 'Google.Chrome';                  Nome = 'Google Chrome' }
+    @{ Id = 'Mozilla.Firefox';                Nome = 'Mozilla Firefox' }
+    @{ Id = 'Oracle.JavaRuntimeEnvironment';  Nome = 'Java Runtime Environment' }
+    @{ Id = 'AnyDesk.AnyDesk';                Nome = 'AnyDesk' }
+    @{ Id = 'Adobe.Acrobat.Reader.64-bit';    Nome = 'Adobe Acrobat Reader' }
+    @{ Id = 'RARLab.WinRAR';                  Nome = 'WinRAR' }
+)
+
+# ============================================================
+# INICIALIZAÇÃO
+# ============================================================
+New-Item -ItemType Directory -Path $Config.BaseDir -Force | Out-Null
+New-Item -ItemType Directory -Path $Config.LogRoot -Force | Out-Null
+$Global:LogFile = Join-Path $Config.LogRoot "padronizacao_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').log"
+
+function Write-Log {
+    param(
+        [Parameter(Mandatory)] [string]$Message,
+        [ValidateSet('INFO','OK','ERRO','AVISO','ETAPA')] [string]$Type = 'INFO'
+    )
+
+    $line = '[{0}] [{1}] {2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Type, $Message
+    $line | Out-File -FilePath $Global:LogFile -Append -Encoding UTF8
+
+    switch ($Type) {
+        'OK'    { Write-Host $line -ForegroundColor Green }
+        'ERRO'  { Write-Host $line -ForegroundColor Red }
+        'AVISO' { Write-Host $line -ForegroundColor Yellow }
+        'ETAPA' { Write-Host "`n$line" -ForegroundColor Cyan }
+        default { Write-Host $line -ForegroundColor White }
+    }
+}
+
+function Write-ErrorLog {
+    param(
+        [Parameter(Mandatory)] [string]$Message,
+        [Parameter()] $ErrorRecord
+    )
+
+    Write-Log $Message 'ERRO'
+    if ($ErrorRecord) {
+        Write-Log "Detalhe: $($ErrorRecord.Exception.Message)" 'ERRO'
+        if ($ErrorRecord.InvocationInfo) {
+            Write-Log "Linha: $($ErrorRecord.InvocationInfo.ScriptLineNumber)" 'ERRO'
+        }
+    }
+}
+
+function Test-IsAdmin {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Ensure-Admin {
+    if (Test-IsAdmin) { return }
+
+    Write-Host 'Reabrindo script como administrador...' -ForegroundColor Yellow
+
+    $path = Ensure-LocalScriptCopy
+    Start-Process powershell.exe -Verb RunAs -ArgumentList @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', "`"$path`""
+    )
+    exit
+}
+
+function Ensure-RegistryPath {
+    if (-not (Test-Path $Config.RegPath)) {
+        New-Item -Path $Config.RegPath -Force | Out-Null
+    }
+}
+
+function Get-StateValue {
+    param([Parameter(Mandatory)] [string]$Name, [object]$Default = $null)
+    if (-not (Test-Path $Config.RegPath)) { return $Default }
+    $prop = Get-ItemProperty -Path $Config.RegPath -Name $Name -ErrorAction SilentlyContinue
+    if ($null -eq $prop) { return $Default }
+    return $prop.$Name
+}
+
+function Set-StateValue {
+    param([Parameter(Mandatory)] [string]$Name, [Parameter(Mandatory)] [object]$Value)
+    Ensure-RegistryPath
+    Set-ItemProperty -Path $Config.RegPath -Name $Name -Value $Value
+}
+
+function Get-Step {
+    return [int](Get-StateValue -Name 'Step' -Default 0)
+}
+
+function Set-Step {
+    param([Parameter(Mandatory)] [int]$Step)
+    Set-StateValue -Name 'Step' -Value $Step
+}
+
+function Clear-State {
+    Remove-Item -Path $Config.RegPath -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $Config.RunOncePath -Name $Config.RunOnceName -ErrorAction SilentlyContinue
+}
+
+function Ensure-LocalScriptCopy {
+    <#
+      Motivo:
+      Quando o script roda por irm | iex, $PSCommandPath pode vir vazio.
+      Para retomada após reboot funcionar, criamos uma cópia local persistente.
+    #>
+
+    New-Item -ItemType Directory -Path $Config.BaseDir -Force | Out-Null
+
+    $currentPath = $PSCommandPath
+    if ([string]::IsNullOrWhiteSpace($currentPath)) {
+        $currentPath = $MyInvocation.MyCommand.Path
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($currentPath) -and (Test-Path $currentPath)) {
+        Copy-Item -Path $currentPath -Destination $Config.LocalScriptPath -Force
+    }
+    else {
+        $rawUrl = 'https://raw.githubusercontent.com/Forevit/PaerroTech/main/PadronizacaoMaquinas/padronizacao.ps1'
+        try {
+            Invoke-WebRequest -Uri $rawUrl -OutFile $Config.LocalScriptPath -UseBasicParsing -ErrorAction Stop
+        }
+        catch {
+            throw "Não foi possível salvar uma cópia local do script. Execute localmente ou verifique acesso ao GitHub. Erro: $($_.Exception.Message)"
+        }
+    }
+
+    Unblock-File -Path $Config.LocalScriptPath -ErrorAction SilentlyContinue
+    Set-StateValue -Name 'LocalScriptPath' -Value $Config.LocalScriptPath
+    return $Config.LocalScriptPath
+}
+
+function Set-RunOnceResume {
+    $path = Get-StateValue -Name 'LocalScriptPath' -Default $Config.LocalScriptPath
+    if (-not (Test-Path $path)) {
+        $path = Ensure-LocalScriptCopy
+    }
+
+    $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$path`""
+    Set-ItemProperty -Path $Config.RunOncePath -Name $Config.RunOnceName -Value $cmd
+    Write-Log "RunOnce configurado para retomar: $cmd" 'OK'
+}
+
+function Show-Header {
+    Clear-Host
+    Write-Host '============================================================' -ForegroundColor Cyan
+    Write-Host ' PADRONIZAÇÃO DE MÁQUINA CORPORATIVA' -ForegroundColor Cyan
+    Write-Host ' by Eduardo Ferreira' -ForegroundColor Cyan
+    Write-Host '============================================================' -ForegroundColor Cyan
+    Write-Host "Hostname atual: $env:COMPUTERNAME" -ForegroundColor Yellow
+    Write-Host "Log: $Global:LogFile" -ForegroundColor Gray
+    Write-Host '============================================================' -ForegroundColor Cyan
+}
+
+function Update-StepProgress {
+    param([int]$Step, [string]$Status)
+    $percent = [math]::Round(($Step / $Config.TotalSteps) * 100)
+    Write-Progress -Activity $Config.ProjectName -Status "Etapa $Step/$($Config.TotalSteps) - $Status" -PercentComplete $percent
+}
+
+function Invoke-Step {
+    param(
+        [Parameter(Mandatory)] [int]$Number,
+        [Parameter(Mandatory)] [string]$Name,
+        [Parameter(Mandatory)] [scriptblock]$Action
+    )
+
+    $current = Get-Step
+    if ($current -ge $Number) {
+        Write-Log "Etapa $Number já concluída: $Name" 'INFO'
+        return
+    }
+
+    Update-StepProgress -Step $Number -Status $Name
+    Write-Log "ETAPA $Number - $Name" 'ETAPA'
+
+    try {
+        & $Action
+        Set-Step -Step $Number
+        Write-Log "Etapa $Number concluída: $Name" 'OK'
+    }
+    catch {
+        Write-ErrorLog "Falha na etapa $Number: $Name" $_
+        Write-Host "`nA execução foi pausada. Verifique o log acima antes de continuar." -ForegroundColor Yellow
+        Pause
+        exit 1
+    }
+}
+
+# ============================================================
+# VALIDAÇÕES E UTILITÁRIOS
+# ============================================================
+function Assert-HostnameValid {
+    param([Parameter(Mandatory)] [string]$Hostname)
+
+    if ([string]::IsNullOrWhiteSpace($Hostname)) { throw 'Hostname não pode ser vazio.' }
+    if ($Hostname.Length -gt 15) { throw "Hostname '$Hostname' excede 15 caracteres, limite NetBIOS." }
+    if ($Hostname -notmatch '^[a-zA-Z0-9-]+$') { throw "Hostname '$Hostname' contém caracteres inválidos. Use letras, números e hífen." }
+    if ($Hostname -match '^-|-$') { throw "Hostname '$Hostname' não pode começar ou terminar com hífen." }
+    return $true
+}
+
+function Get-NextHostnameFromLDAP {
+    param(
+        [Parameter(Mandatory)] [string]$Base,
+        [Parameter(Mandatory)] [string]$DomainDN,
+        [Parameter(Mandatory)] [string]$Suffix
+    )
+
+    try {
+        $root = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$DomainDN")
+        $searcher = New-Object System.DirectoryServices.DirectorySearcher($root)
+        $searcher.Filter = "(&(objectCategory=computer)(name=$Base$Suffix*))"
+        [void]$searcher.PropertiesToLoad.Add('name')
+        $results = $searcher.FindAll()
+
+        $names = @($results | ForEach-Object { $_.Properties['name'][0] })
+        if ($names.Count -eq 0) {
+            return @{ Suggestion = "${Base}${Suffix}0001"; Existing = @() }
+        }
+
+        $numbers = @($names | ForEach-Object {
+            if ($_ -match '(\d+)$') { [int]$Matches[1] }
+        }) | Sort-Object
+
+        $next = 1
+        if ($numbers.Count -gt 0) {
+            $next = (($numbers | Measure-Object -Maximum).Maximum + 1)
+        }
+
+        return @{
+            Suggestion = ("{0}{1}{2:D4}" -f $Base, $Suffix, $next)
+            Existing   = ($names | Sort-Object)
+        }
+    }
+    catch {
+        Write-Log "Falha na consulta LDAP: $($_.Exception.Message)" 'AVISO'
+        return $null
+    }
+}
+
+function Resolve-WingetPath {
+    $cmd = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    $candidates = Get-ChildItem "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*\winget.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending
+
+    if ($candidates) { return $candidates[0].FullName }
+    return $null
+}
+
+function Invoke-WingetInstall {
+    param(
+        [Parameter(Mandatory)] [string]$Id,
+        [Parameter(Mandatory)] [string]$Name
+    )
+
+    $winget = Resolve-WingetPath
+    if (-not $winget) {
+        throw 'Winget não encontrado. Instale/atualize o App Installer pela Microsoft Store.'
+    }
+
+    Write-Log "Instalando/validando $Name via Winget..." 'INFO'
+
+    $args = @(
+        'install',
+        '--id', $Id,
+        '--exact',
+        '--silent',
+        '--disable-interactivity',
+        '--accept-package-agreements',
+        '--accept-source-agreements'
+    )
+
+    $output = & $winget @args 2>&1
+    $exit = $LASTEXITCODE
+    $output | Out-File -FilePath $Global:LogFile -Append -Encoding UTF8
+
+    # 0 = OK
+    # -1978335189 geralmente indica pacote já instalado ou estado equivalente em algumas versões do winget
+    if ($exit -eq 0 -or $exit -eq -1978335189) {
+        Write-Log "$Name OK." 'OK'
+    }
+    else {
+        Write-Log "$Name retornou código $exit. Verifique o log." 'AVISO'
+    }
+}
+
+function Invoke-DownloadFile {
+    param(
+        [Parameter(Mandatory)] [string]$Uri,
+        [Parameter(Mandatory)] [string]$OutFile
+    )
+
+    Write-Log "Baixando: $Uri" 'INFO'
+    Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+    if (-not (Test-Path $OutFile)) { throw "Download não gerou arquivo: $OutFile" }
+}
+
+function Install-GLPIAgent {
+    $version = $Config.GLPIAgentVersion
+    $url = "https://github.com/glpi-project/glpi-agent/releases/download/$version/GLPI-Agent-$version-x64.msi"
+    $msi = Join-Path $env:TEMP "GLPI-Agent-$version-x64.msi"
+
+    Invoke-DownloadFile -Uri $url -OutFile $msi
+
+    $arguments = @(
+        '/i', "`"$msi`"",
+        '/quiet',
+        '/norestart',
+        "SERVER=`"$($Config.GLPIServer)`"",
+        "RUNNOW=1"
+    ) -join ' '
+
+    Write-Log 'Instalando GLPI Agent...' 'INFO'
+    $proc = Start-Process msiexec.exe -ArgumentList $arguments -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+        throw "Instalação do GLPI Agent retornou código $($proc.ExitCode)."
+    }
+
+    Remove-Item $msi -Force -ErrorAction SilentlyContinue
+    Write-Log "GLPI Agent instalado. Servidor: $($Config.GLPIServer)" 'OK'
+}
+
+function Install-OfficeC2R {
+    <#
+      Instalação do Office/Microsoft 365 Apps via instalador Click-to-Run direto.
+      Este método é mais simples que ODT, mas dá menos controle de produto/canal.
+      Para ambiente corporativo 100% silencioso e padronizado, ODT ainda é mais previsível.
+    #>
+
+    $officeDir = Join-Path $env:TEMP 'PaerroTech_OfficeC2R'
+    New-Item -ItemType Directory -Path $officeDir -Force | Out-Null
+
+    $installer = Join-Path $officeDir 'OfficeSetup.exe'
+    Invoke-DownloadFile -Uri $Config.OfficeC2RUrl -OutFile $installer
+
+    if (-not (Test-Path $installer)) {
+        throw 'Instalador do Office não foi baixado corretamente.'
+    }
+
+    Write-Log 'Instalando Office/Microsoft 365 Apps via Click-to-Run. Esta etapa pode demorar.' 'INFO'
+
+    $proc = Start-Process -FilePath $installer -ArgumentList '/quiet' -Wait -PassThru
+
+    if ($proc.ExitCode -ne 0) {
+        Write-Log "Instalador retornou código $($proc.ExitCode). Tentando execução sem argumento silencioso." 'AVISO'
+        $proc = Start-Process -FilePath $installer -Wait -PassThru
+    }
+
+    Write-Log 'Instalador do Office finalizado. Verifique ativação/licença conforme política da empresa.' 'OK'
+}
+
+function Install-ManufacturerDrivers {
+    $manufacturer = (Get-CimInstance Win32_ComputerSystem).Manufacturer
+    Write-Log "Fabricante detectado: $manufacturer" 'INFO'
+
+    switch -Wildcard ($manufacturer.ToLower()) {
+        '*dell*' {
+            Invoke-WingetInstall -Id 'Dell.CommandUpdate' -Name 'Dell Command Update'
+            $dcuPaths = @(
+                "$env:ProgramFiles\Dell\CommandUpdate\dcu-cli.exe",
+                "${env:ProgramFiles(x86)}\Dell\CommandUpdate\dcu-cli.exe"
+            )
+            $dcu = $dcuPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if ($dcu) {
+                Write-Log 'Executando Dell Command Update...' 'INFO'
+                Start-Process $dcu -ArgumentList '/applyUpdates -silent -reboot=disable' -Wait
+                Write-Log 'Dell Command Update finalizado.' 'OK'
+            }
+            else {
+                Write-Log 'Dell Command Update instalado, mas dcu-cli.exe não foi localizado.' 'AVISO'
+            }
+        }
+        '*lenovo*' {
+            Invoke-WingetInstall -Id 'Lenovo.SystemUpdate' -Name 'Lenovo System Update'
+            Write-Log 'Lenovo System Update instalado. Aplicação automática pode exigir TVSU/CLI conforme modelo.' 'AVISO'
+        }
+        '*hp*' {
+            Invoke-WingetInstall -Id 'HP.HPSupportAssistant' -Name 'HP Support Assistant'
+        }
+        default {
+            Write-Log "Fabricante '$manufacturer' não mapeado para driver automático." 'AVISO'
+        }
+    }
+}
+
+function Start-WindowsUpdateTask {
+    Write-Log 'Preparando Windows Update em segundo plano...' 'INFO'
+
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null
+        }
+
+        if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
+            Install-Module -Name PSWindowsUpdate -Force -Scope AllUsers -Confirm:$false | Out-Null
+        }
+
+        Import-Module PSWindowsUpdate -Force
+        Write-Log 'Iniciando busca/instalação de updates. Reboot ignorado nesta etapa.' 'INFO'
+        Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -Verbose 2>&1 | Out-File -FilePath $Global:LogFile -Append -Encoding UTF8
+        Write-Log 'Windows Update finalizado ou sem atualizações pendentes.' 'OK'
+    }
+    catch {
+        Write-Log "Windows Update falhou, mas a padronização continuará: $($_.Exception.Message)" 'AVISO'
+    }
+}
+
+function Test-WindowsEdition {
+    $os = Get-CimInstance Win32_OperatingSystem
+    Write-Log "Sistema detectado: $($os.Caption)" 'INFO'
+
+    if ($os.Caption -like '*Home*') {
+        Write-Log 'Windows Home detectado. É necessário upgrade para Pro antes de domínio.' 'AVISO'
+        Write-Host "`nEsta máquina está com Windows Home. Faça upgrade para Pro e execute novamente." -ForegroundColor Yellow
+        Set-StateValue -Name 'WindowsEditionChecked' -Value 0
+        Pause
+        exit 1
+    }
+
+    Set-StateValue -Name 'WindowsEditionChecked' -Value 1
+    Write-Log 'Edição do Windows compatível.' 'OK'
+}
+
+function Configure-LocalAdministrator {
+    $adminName = 'Administrador'
+    $user = Get-LocalUser -Name $adminName -ErrorAction SilentlyContinue
+    if (-not $user) {
+        Write-Log "Conta '$adminName' não encontrada. Tentando localizar SID RID-500." 'AVISO'
+        $user = Get-LocalUser | Where-Object { $_.SID.Value -match '-500$' } | Select-Object -First 1
+        if (-not $user) { throw 'Não foi possível localizar a conta Administrador local.' }
+        $adminName = $user.Name
+    }
+
+    do {
+        $pass1 = Read-Host "Defina a senha para a conta '$adminName'" -AsSecureString
+        $pass2 = Read-Host 'Confirme a senha' -AsSecureString
+
+        $bstr1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($pass1)
+        $bstr2 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($pass2)
+        try {
+            $plain1 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr1)
+            $plain2 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr2)
+            $match = ($plain1 -eq $plain2)
+        }
+        finally {
+            if ($bstr1 -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr1) }
+            if ($bstr2 -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr2) }
+        }
+
+        if (-not $match) { Write-Log 'As senhas não coincidem. Tente novamente.' 'AVISO' }
+    } while (-not $match)
+
+    Enable-LocalUser -Name $adminName -ErrorAction SilentlyContinue
+    Set-LocalUser -Name $adminName -Password $pass1 -PasswordNeverExpires $true
+    Write-Log "Conta '$adminName' habilitada/configurada." 'OK'
+}
+
+function Select-HostnameAndDomain {
+    <#
+      Novo fluxo:
+      - O técnico digita diretamente o domínio DNS do cliente.
+      - Se o domínio estiver cadastrado em $DominiosClientes, o script usa Base e LDAP automaticamente.
+      - Se o domínio não estiver cadastrado, o técnico ainda consegue informar o hostname manualmente.
+    #>
+
+    do {
+        $domainDns = Read-Host 'Digite o domínio do cliente. Ex: apoio.local, locus.local, gesquadra.com'
+        $domainDns = $domainDns.Trim().ToLower()
+
+        if ([string]::IsNullOrWhiteSpace($domainDns)) {
+            Write-Log 'Domínio não pode ser vazio.' 'ERRO'
+            $domainValid = $false
+            continue
+        }
+
+        if ($domainDns -notmatch '^[a-z0-9.-]+\.[a-z]{2,}$') {
+            Write-Log "Domínio '$domainDns' parece inválido. Exemplo válido: apoio.local" 'ERRO'
+            $domainValid = $false
+            continue
+        }
+
+        $domainValid = $true
+    } while (-not $domainValid)
+
+    $suggestion = $null
+    $cliente = $null
+
+    if ($DominiosClientes.Contains($domainDns)) {
+        $cliente = $DominiosClientes[$domainDns]
+        Write-Log "Cliente identificado: $($cliente.Nome)" 'OK'
+        Write-Log "Base de hostname: $($cliente.Base)" 'INFO'
+
+        Write-Host "`nTipo de máquina:`n" -ForegroundColor Yellow
+        foreach ($key in $TiposMaquina.Keys) {
+            $type = $TiposMaquina[$key]
+            Write-Host " [$key] $($type.Label) ($($cliente.Base)$($type.Sufixo)0001)" -ForegroundColor White
+        }
+
+        do {
+            $typeChoice = Read-Host 'Digite o número do tipo de máquina'
+            if (-not $TiposMaquina.Contains($typeChoice)) {
+                Write-Log 'Tipo de máquina inválido.' 'ERRO'
+                $typeValid = $false
+            }
+            else {
+                $typeValid = $true
+            }
+        } while (-not $typeValid)
+
+        $type = $TiposMaquina[$typeChoice]
+        $ldapResult = Get-NextHostnameFromLDAP -Base $cliente.Base -DomainDN $cliente.DominioLDAP -Suffix $type.Sufixo
+
+        if ($ldapResult) {
+            $suggestion = $ldapResult.Suggestion
+            Write-Host "`nPróximo hostname sugerido: $suggestion" -ForegroundColor Green
+            Write-Log "Hostname sugerido: $suggestion" 'OK'
+        }
+        else {
+            $suggestion = "{0}{1}0001" -f $cliente.Base, $type.Sufixo
+            Write-Host "`nNão foi possível consultar o LDAP. Sugestão inicial: $suggestion" -ForegroundColor Yellow
+            Write-Log "Sugestão sem LDAP: $suggestion" 'AVISO'
+        }
+    }
+    else {
+        Write-Log "Domínio '$domainDns' não está cadastrado na tabela interna. Hostname será manual." 'AVISO'
+        Write-Host "`nDomínio não cadastrado na tabela do script." -ForegroundColor Yellow
+        Write-Host 'Você ainda poderá digitar o hostname manualmente.' -ForegroundColor Yellow
+    }
+
+    do {
+        if ($suggestion) {
+            $inputName = Read-Host "Usar '$suggestion'? Enter para confirmar ou digite outro hostname"
+            $hostname = if ([string]::IsNullOrWhiteSpace($inputName)) { $suggestion } else { $inputName.Trim().ToUpper() }
+        }
+        else {
+            $hostname = (Read-Host 'Digite o novo hostname').Trim().ToUpper()
+        }
+
+        try {
+            [void](Assert-HostnameValid -Hostname $hostname)
+            $valid = $true
+        }
+        catch {
+            Write-Log $_.Exception.Message 'ERRO'
+            $valid = $false
+        }
+    } while (-not $valid)
+
+    Set-StateValue -Name 'Hostname' -Value $hostname
+    Set-StateValue -Name 'DomainDNS' -Value $domainDns
+    if ($cliente) {
+        Set-StateValue -Name 'Cliente' -Value $cliente.Nome
+    }
+
+    return @{ Hostname = $hostname; DomainDNS = $domainDns }
+}
+
+function Join-DomainAndRename {
+    if ($SkipDomainJoin) {
+        Write-Log 'Ingresso no domínio ignorado por parâmetro -SkipDomainJoin.' 'AVISO'
+        return
+    }
+
+    $selection = Select-HostnameAndDomain
+    $domainUser = Read-Host 'Usuário do domínio com permissão para adicionar máquina. Ex: dominio\usuario'
+    $domainPass = Read-Host 'Senha do usuário do domínio' -AsSecureString
+    $credential = [pscredential]::new($domainUser, $domainPass)
+
+    Ensure-LocalScriptCopy | Out-Null
+    Set-RunOnceResume
+
+    Write-Log "Adicionando máquina ao domínio '$($selection.DomainDNS)' com hostname '$($selection.Hostname)'..." 'INFO'
+
+    Add-Computer `
+        -DomainName $selection.DomainDNS `
+        -Credential $credential `
+        -NewName $selection.Hostname `
+        -Force `
+        -ErrorAction Stop
+
+    Write-Log 'Máquina adicionada ao domínio. Reiniciando para aplicar.' 'OK'
+    Set-Step -Step 2
+    Start-Sleep -Seconds 5
+    Restart-Computer -Force
     exit
 }
 
 # ============================================================
-#  CONFIGURAÇÕES GLOBAIS
+# EXECUÇÃO PRINCIPAL
 # ============================================================
-
-$Script:Version   = "2.0"
-$Script:StartTime = Get-Date
-$Script:Hostname  = $env:COMPUTERNAME
-$Script:BaseLog   = "C:\Users\Public\Documents\Logs\Preventiva"
-$Script:Data      = Get-Date -Format "yyyy-MM-dd_HH-mm"
-$Script:LogFile   = "$($Script:BaseLog)\preventiva_$($Script:Hostname)_$($Script:Data).log"
-
-# Share de rede para centralizar logs (ajuste conforme ambiente)
-$Script:ShareLogs = "\\servidor\Preventivas"   # deixe vazio "" para desabilitar
-
-# Resultado acumulado de cada etapa (para o relatório final)
-$Script:Resultados = [System.Collections.Generic.List[PSCustomObject]]::new()
-
-# ============================================================
-#  INICIALIZAÇÃO DO LOG
-# ============================================================
-
-if (!(Test-Path $Script:BaseLog)) {
-    New-Item -ItemType Directory -Path $Script:BaseLog -Force | Out-Null
-}
-
-function Write-Log {
-    param(
-        [string]$Mensagem,
-        [string]$Nivel = "INFO"
-    )
-    $Linha = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [$Nivel] $Mensagem"
-    Add-Content -Path $Script:LogFile -Value $Linha
-}
-
-Write-Log "===== INÍCIO DA PREVENTIVA v$($Script:Version) =====" "INFO"
-Write-Log "Cliente: $Cliente | Técnico: $Tecnico | DryRun: $DryRun | Silent: $Silent" "INFO"
-
-# ============================================================
-#  TUI — INTERFACE VISUAL NO CONSOLE
-# ============================================================
-
-# Etapas definidas (ordem de exibição)
-$Script:Etapas = [ordered]@{
-    "Admin"      = @{ Label = "Administrador local";          Status = "AGUARD" }
-    "Windows"    = @{ Label = "Licença Windows";              Status = "AGUARD" }
-    "Office"     = @{ Label = "Licença Office";               Status = "AGUARD" }
-    "Defender"   = @{ Label = "Windows Defender";             Status = "AGUARD" }
-    "WinUpdate"  = @{ Label = "Windows Update";               Status = "AGUARD" }
-    "OffUpdate"  = @{ Label = "Office Update";                Status = "AGUARD" }
-    "Winget"     = @{ Label = "Winget upgrade";               Status = "AGUARD" }
-    "Drivers"    = @{ Label = "Drivers do fabricante";        Status = "AGUARD" }
-    "GLPI"       = @{ Label = "GLPI Agent";                   Status = "AGUARD" }
-    "Perfis"     = @{ Label = "Limpeza de perfis antigos";    Status = "AGUARD" }
-    "Disco"      = @{ Label = "Limpeza de disco";             Status = "AGUARD" }
-    "Softwares"  = @{ Label = "Inventário de softwares";      Status = "AGUARD" }
-    "Bateria"    = @{ Label = "Saúde da bateria";             Status = "AGUARD" }
-    "Reboot"     = @{ Label = "Reboot pendente";              Status = "AGUARD" }
-    "Usuarios"   = @{ Label = "Auditoria de usuários";        Status = "AGUARD" }
-}
-
-$Script:TUI_StartLine = 0
-
-function TUI-Init {
-    Clear-Host
-
-    $dryTag = if ($DryRun) { " [DRY RUN - sem alterações]" } else { "" }
-
-    Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║        PREVENTIVA CORPORATIVA  v$($Script:Version)              ║" -ForegroundColor Cyan
-    Write-Host "  ╠══════════════════════════════════════════════════════╣" -ForegroundColor Cyan
-    Write-Host "  ║  HOST   : $($Script:Hostname.PadRight(42))║" -ForegroundColor Cyan
-    Write-Host "  ║  DATA   : $(( Get-Date -Format 'dd/MM/yyyy HH:mm').PadRight(42))║" -ForegroundColor Cyan
-    Write-Host "  ║  CLIENTE: $($Cliente.PadRight(42))║" -ForegroundColor Cyan
-    Write-Host "  ║  TECNICO: $($Tecnico.PadRight(42))║" -ForegroundColor Cyan
-    Write-Host "  ╚══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-    if ($DryRun) {
-        Write-Host ""
-        Write-Host "  ⚠  MODO DRY RUN — nenhuma alteração será feita" -ForegroundColor Yellow
-    }
-    Write-Host ""
-
-    foreach ($chave in $Script:Etapas.Keys) {
-        $label = $Script:Etapas[$chave].Label
-        Write-Host "  [ ] $($label.PadRight(40)) AGUARDANDO" -ForegroundColor DarkGray
+try {
+    if ($ResetState) {
+        Clear-State
+        Write-Host 'Estado anterior limpo.' -ForegroundColor Yellow
     }
 
-    Write-Host ""
-    $Script:TUI_StartLine = [Console]::CursorTop - ($Script:Etapas.Count + 1)
-}
+    Ensure-Admin
+    Ensure-LocalScriptCopy | Out-Null
+    Show-Header
 
-function TUI-Update {
-    param([string]$Chave, [string]$NovoStatus, [string]$Detalhe = "")
+    Write-Log 'Script iniciado.' 'INFO'
+    Write-Log "Etapa atual: $(Get-Step)" 'INFO'
+    Write-Log "Log salvo em: $Global:LogFile" 'INFO'
 
-    $Script:Etapas[$Chave].Status = $NovoStatus
-
-    $index = [Array]::IndexOf(($Script:Etapas.Keys | ForEach-Object { $_ }), $Chave)
-    $linha = $Script:TUI_StartLine + $index
-
-    $savedTop  = [Console]::CursorTop
-    $savedLeft = [Console]::CursorLeft
-
-    [Console]::SetCursorPosition(0, $linha)
-
-    $label = $Script:Etapas[$Chave].Label.PadRight(40)
-
-    switch ($NovoStatus) {
-        "OK"      {
-            Write-Host "  [" -NoNewline -ForegroundColor DarkGray
-            Write-Host "✔" -NoNewline -ForegroundColor Green
-            Write-Host "] $label " -NoNewline -ForegroundColor Gray
-            Write-Host "OK     $Detalhe".PadRight(20) -ForegroundColor Green
-        }
-        "ERRO"    {
-            Write-Host "  [" -NoNewline -ForegroundColor DarkGray
-            Write-Host "✖" -NoNewline -ForegroundColor Red
-            Write-Host "] $label " -NoNewline -ForegroundColor Gray
-            Write-Host "ERRO   $Detalhe".PadRight(20) -ForegroundColor Red
-        }
-        "ALERTA"  {
-            Write-Host "  [" -NoNewline -ForegroundColor DarkGray
-            Write-Host "!" -NoNewline -ForegroundColor Yellow
-            Write-Host "] $label " -NoNewline -ForegroundColor Gray
-            Write-Host "ALERTA $Detalhe".PadRight(20) -ForegroundColor Yellow
-        }
-        "SKIP"    {
-            Write-Host "  [" -NoNewline -ForegroundColor DarkGray
-            Write-Host "-" -NoNewline -ForegroundColor DarkGray
-            Write-Host "] $label " -NoNewline -ForegroundColor DarkGray
-            Write-Host "SKIP   $Detalhe".PadRight(20) -ForegroundColor DarkGray
-        }
-        "EXEC"    {
-            Write-Host "  [" -NoNewline -ForegroundColor DarkGray
-            Write-Host "~" -NoNewline -ForegroundColor Cyan
-            Write-Host "] $label " -NoNewline -ForegroundColor Gray
-            Write-Host "EXEC...".PadRight(20) -ForegroundColor Cyan
-        }
+    Invoke-Step -Number 1 -Name 'Pré-validação do Windows e configuração do Administrador Local' -Action {
+        Test-WindowsEdition
+        Configure-LocalAdministrator
     }
 
-    [Console]::SetCursorPosition($savedLeft, $savedTop)
-}
-
-function TUI-Log {
-    param([string]$Mensagem, [string]$Cor = "Gray")
-    $linhaLog = $Script:TUI_StartLine + $Script:Etapas.Count + 2
-    [Console]::SetCursorPosition(0, $linhaLog)
-    Write-Host "  $Mensagem".PadRight(60) -ForegroundColor $Cor
-}
-
-function Registrar {
-    param(
-        [string]$Etapa,
-        [string]$Status,
-        [string]$Detalhe = ""
-    )
-    $Script:Resultados.Add([PSCustomObject]@{
-        Etapa   = $Etapa
-        Status  = $Status
-        Detalhe = $Detalhe
-    })
-    Write-Log "$Etapa — $Status — $Detalhe" $Status
-    TUI-Update -Chave $Etapa -NovoStatus $Status -Detalhe $Detalhe
-}
-
-# ============================================================
-#  SNAPSHOT DE HARDWARE (antes de tudo)
-# ============================================================
-
-function Get-HardwareInfo {
-    $cs  = Get-CimInstance Win32_ComputerSystem
-    $os  = Get-CimInstance Win32_OperatingSystem
-    $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-    $bios= Get-CimInstance Win32_BIOS
-
-    $discos = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -ne $null } | ForEach-Object {
-        $total = [math]::Round(($_.Used + $_.Free) / 1GB, 1)
-        $livre = [math]::Round($_.Free / 1GB, 1)
-        "$($_.Name): ${livre}GB livres de ${total}GB"
+    Invoke-Step -Number 2 -Name 'Ingresso no domínio e renomeação da máquina' -Action {
+        Join-DomainAndRename
     }
 
-    $ips = (Get-NetIPAddress -AddressFamily IPv4 |
-            Where-Object { $_.InterfaceAlias -notmatch "Loopback" } |
-            Select-Object -ExpandProperty IPAddress) -join ", "
-
-    $ram_total = [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
-    $ram_livre = [math]::Round($os.FreePhysicalMemory / 1MB / 1024, 1)
-
-    return [PSCustomObject]@{
-        Fabricante     = $cs.Manufacturer
-        Modelo         = $cs.Model
-        NumSerie       = $bios.SerialNumber
-        CPU            = $cpu.Name.Trim()
-        RAM_Total_GB   = $ram_total
-        RAM_Livre_GB   = $ram_livre
-        Discos         = $discos -join " | "
-        SO             = $os.Caption
-        Build          = $os.BuildNumber
-        IPs            = $ips
-        Uptime_Dias    = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalDays, 1)
-    }
-}
-
-# ============================================================
-#  INTERNET CHECK
-# ============================================================
-
-function Test-Internet {
-    try {
-        Invoke-WebRequest "https://www.google.com" -TimeoutSec 5 | Out-Null
-        Write-Log "Conectividade OK" "OK"
-        return $true
-    } catch {
-        Write-Log "Sem acesso à internet" "ALERTA"
-        return $false
-    }
-}
-
-# ============================================================
-#  1. ADMINISTRADOR LOCAL  (SecureString segura — sem Marshal)
-# ============================================================
-
-function Set-AdminLocal {
-    TUI-Update "Admin" "EXEC"
-    try {
-        if ($DryRun) {
-            Registrar "Admin" "SKIP" "DryRun"
+    Invoke-Step -Number 3 -Name 'Instalação de aplicativos essenciais via Winget' -Action {
+        if ($SkipApps) {
+            Write-Log 'Instalação de aplicativos ignorada por parâmetro -SkipApps.' 'AVISO'
             return
         }
-
-        net user Administrador /active:yes 2>&1 | Out-Null
-
-        if ($Silent) {
-            # Em modo silencioso, a senha deve vir de variável de ambiente ou cofre
-            $SenhaEnv = [System.Environment]::GetEnvironmentVariable("PREV_ADMIN_PASS", "Machine")
-            if ($SenhaEnv) {
-                $Senha = ConvertTo-SecureString $SenhaEnv -AsPlainText -Force
-            } else {
-                Write-Log "PREV_ADMIN_PASS não definida — senha do Admin ignorada" "ALERTA"
-                Registrar "Admin" "ALERTA" "Sem senha no env"
-                return
-            }
-        } else {
-            $Senha = Read-Host "Nova senha do Administrador" -AsSecureString
+        foreach ($app in $AppsWinget) {
+            Invoke-WingetInstall -Id $app.Id -Name $app.Nome
         }
-
-        # ✅ Usa LocalAccounts — SecureString nunca vira texto plano
-        Set-LocalUser -Name "Administrador" -Password $Senha
-        Registrar "Admin" "OK"
-    } catch {
-        Registrar "Admin" "ERRO" $_.Exception.Message
-    }
-}
-
-# ============================================================
-#  2. WINDOWS STATUS
-# ============================================================
-
-function Get-WindowsStatus {
-    TUI-Update "Windows" "EXEC"
-    try {
-        $saida = cscript //nologo C:\Windows\System32\slmgr.vbs /xpr 2>&1
-        if ($saida -match "permanently activated") {
-            Registrar "Windows" "OK" "Ativado"
-        } else {
-            Registrar "Windows" "ALERTA" "Não ativado"
-        }
-    } catch {
-        Registrar "Windows" "ERRO" $_.Exception.Message
-    }
-}
-
-# ============================================================
-#  3. OFFICE
-# ============================================================
-
-function Get-OfficeStatus {
-    TUI-Update "Office" "EXEC"
-    try {
-        $paths = @(
-            "C:\Program Files\Microsoft Office\Office16\OSPP.VBS",
-            "C:\Program Files (x86)\Microsoft Office\Office16\OSPP.VBS",
-            "C:\Program Files\Microsoft Office\root\Office16\OSPP.VBS",
-            "C:\Program Files (x86)\Microsoft Office\root\Office16\OSPP.VBS"
-        )
-        $ativado = $false
-        $versao  = ""
-
-        foreach ($p in $paths) {
-            if (Test-Path $p) {
-                $s = cscript //nologo $p /dstatus 2>&1
-                if ($s -match "LICENSE STATUS:\s+---LICENSED---") { $ativado = $true }
-                if ($s -match "(?i)Microsoft Office.*?(\d{4})") { $versao = $Matches[1] }
-            }
-        }
-
-        # Versão via registro
-        $regVer = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -ErrorAction SilentlyContinue).VersionToReport
-
-        $detalhe = if ($ativado) { "Ativado" } else { "Não ativado" }
-        if ($regVer) { $detalhe += " | $regVer" }
-
-        Registrar "Office" (if ($ativado) { "OK" } else { "ALERTA" }) $detalhe
-    } catch {
-        Registrar "Office" "ERRO" $_.Exception.Message
-    }
-}
-
-# ============================================================
-#  4. WINDOWS DEFENDER
-# ============================================================
-
-function Get-DefenderStatus {
-    TUI-Update "Defender" "EXEC"
-    try {
-        $mp = Get-MpComputerStatus -ErrorAction Stop
-
-        $ativo    = $mp.AntivirusEnabled
-        $atualiz  = $mp.AntivirusSignatureAge -le 3   # definições com até 3 dias
-        $scanDias = [math]::Round(((Get-Date) - $mp.FullScanEndTime).TotalDays)
-
-        $detalhe = "Definições: $($mp.AntivirusSignatureVersion) | Último scan: ${scanDias}d atrás"
-
-        if ($ativo -and $atualiz) {
-            Registrar "Defender" "OK" $detalhe
-        } elseif (!$ativo) {
-            Registrar "Defender" "ERRO" "Defender DESABILITADO"
-        } else {
-            Registrar "Defender" "ALERTA" "Definições desatualizadas ($($mp.AntivirusSignatureAge)d)"
-        }
-    } catch {
-        Registrar "Defender" "ALERTA" "Não verificado (AV terceiro?)"
-    }
-}
-
-# ============================================================
-#  BLOCO PARALELO — Updates (WinUpdate + OffUpdate + Winget)
-# ============================================================
-
-function Start-UpdatesParalelo {
-    if ($SkipUpdates) {
-        Registrar "WinUpdate" "SKIP" "SkipUpdates"
-        Registrar "OffUpdate" "SKIP" "SkipUpdates"
-        Registrar "Winget"    "SKIP" "SkipUpdates"
-        return
     }
 
-    TUI-Update "WinUpdate" "EXEC"
-    TUI-Update "OffUpdate" "EXEC"
-    TUI-Update "Winget"    "EXEC"
-
-    TUI-Log "Rodando Windows Update, Office Update e Winget em paralelo..." "Cyan"
-
-    # ── Job 1: Windows Update ──────────────────────────────
-    $jobWU = Start-Job -ScriptBlock {
-        param($dry)
-        try {
-            if ($dry) { return @{ Status="SKIP"; Detalhe="DryRun" } }
-            Install-Module PSWindowsUpdate -Force -Confirm:$false -Scope AllUsers -ErrorAction SilentlyContinue
-            Import-Module PSWindowsUpdate -ErrorAction Stop
-            $updates = Get-WindowsUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop
-            if (!$dry) { Install-WindowsUpdate -AcceptAll -IgnoreReboot -Confirm:$false | Out-Null }
-            return @{ Status="OK"; Detalhe="$($updates.Count) update(s)" }
-        } catch {
-            return @{ Status="ERRO"; Detalhe=$_.Exception.Message }
-        }
-    } -ArgumentList $DryRun
-
-    # ── Job 2: Office Update ───────────────────────────────
-    $jobOff = Start-Job -ScriptBlock {
-        param($dry)
-        try {
-            $exe = "C:\Program Files\Common Files\Microsoft Shared\ClickToRun\OfficeC2RClient.exe"
-            if (!(Test-Path $exe)) { return @{ Status="ALERTA"; Detalhe="ClickToRun não encontrado" } }
-            if (!$dry) { Start-Process $exe -ArgumentList "/update user displaylevel=false forceappshutdown=true" -Wait }
-            return @{ Status=(if($dry){"SKIP"}else{"OK"}); Detalhe=(if($dry){"DryRun"}else{"Atualizado"}) }
-        } catch {
-            return @{ Status="ERRO"; Detalhe=$_.Exception.Message }
-        }
-    } -ArgumentList $DryRun
-
-    # ── Job 3: Winget ──────────────────────────────────────
-    $jobWG = Start-Job -ScriptBlock {
-        param($dry)
-        try {
-            if ($dry) { return @{ Status="SKIP"; Detalhe="DryRun" } }
-            $r = winget upgrade --all --silent --accept-source-agreements --accept-package-agreements 2>&1
-            if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
-                return @{ Status="ALERTA"; Detalhe="Exit code $LASTEXITCODE" }
-            }
-            return @{ Status="OK"; Detalhe="Concluído" }
-        } catch {
-            return @{ Status="ERRO"; Detalhe=$_.Exception.Message }
-        }
-    } -ArgumentList $DryRun
-
-    # Aguarda os três jobs
-    $jobs = @($jobWU, $jobOff, $jobWG)
-    $chaves = @("WinUpdate", "OffUpdate", "Winget")
-
-    Wait-Job -Job $jobs | Out-Null
-
-    for ($i = 0; $i -lt $jobs.Count; $i++) {
-        $resultado = Receive-Job -Job $jobs[$i]
-        Registrar $chaves[$i] $resultado.Status $resultado.Detalhe
-        Remove-Job -Job $jobs[$i]
-    }
-
-    TUI-Log "" "Gray"
-}
-
-# ============================================================
-#  8. DRIVERS (FABRICANTE)
-# ============================================================
-
-function Update-Drivers {
-    TUI-Update "Drivers" "EXEC"
-    try {
-        $fab = (Get-CimInstance Win32_ComputerSystem).Manufacturer
-
-        if ($fab -like "*Lenovo*") {
-            $exe = "C:\Program Files (x86)\Lenovo\System Update\tvsu.exe"
-            if (Test-Path $exe) {
-                if (!$DryRun) { Start-Process $exe -ArgumentList "/CM -search A -action INSTALL -noicon -includerebootpackages 3" -Wait }
-                Registrar "Drivers" (if($DryRun){"SKIP"}else{"OK"}) "Lenovo System Update"
-            } else {
-                Registrar "Drivers" "ALERTA" "Lenovo Update não instalado"
-            }
-        }
-        elseif ($fab -like "*Dell*") {
-            $exe = "C:\Program Files (x86)\Dell\CommandUpdate\dcu-cli.exe"
-            if (Test-Path $exe) {
-                if (!$DryRun) { Start-Process $exe -ArgumentList "/applyUpdates -silent" -Wait }
-                Registrar "Drivers" (if($DryRun){"SKIP"}else{"OK"}) "Dell Command Update"
-            } else {
-                Registrar "Drivers" "ALERTA" "Dell Command Update não instalado"
-            }
-        }
-        elseif ($fab -like "*HP*" -or $fab -like "*Hewlett*") {
-            $exe = "${env:ProgramFiles}\HP\HP Support Framework\HPSF.exe"
-            if (Test-Path $exe) {
-                if (!$DryRun) { Start-Process $exe -ArgumentList "/s /o" -Wait }
-                Registrar "Drivers" (if($DryRun){"SKIP"}else{"OK"}) "HP Support Assistant"
-            } else {
-                Registrar "Drivers" "ALERTA" "HP Support Assistant não instalado"
-            }
-        }
-        elseif ($fab -like "*Acer*") {
-            Registrar "Drivers" "ALERTA" "Acer — atualizar via Care Center manualmente"
-        }
-        else {
-            Registrar "Drivers" "ALERTA" "Fabricante não mapeado: $fab"
-        }
-    } catch {
-        Registrar "Drivers" "ERRO" $_.Exception.Message
-    }
-}
-
-# ============================================================
-#  9. GLPI AGENT
-# ============================================================
-
-function Invoke-GLPIAgent {
-    TUI-Update "GLPI" "EXEC"
-    try {
-        $svc = Get-Service -Name "glpi-agent" -ErrorAction SilentlyContinue
-        if (!$svc) {
-            Registrar "GLPI" "ALERTA" "Serviço não encontrado"
+    Invoke-Step -Number 4 -Name 'Instalação do GLPI Agent' -Action {
+        if ($SkipGLPI) {
+            Write-Log 'GLPI Agent ignorado por parâmetro -SkipGLPI.' 'AVISO'
             return
         }
-        if ($svc.Status -ne "Running") { Start-Service glpi-agent }
-        $exe = "C:\Program Files\GLPI-Agent\glpi-agent.exe"
-        if (Test-Path $exe) {
-            if (!$DryRun) {
-                $proc = Start-Process $exe -ArgumentList "--force" -Wait -PassThru
-                Registrar "GLPI" (if($proc.ExitCode -eq 0){"OK"}else{"ALERTA"}) "ExitCode: $($proc.ExitCode)"
-            } else {
-                Registrar "GLPI" "SKIP" "DryRun"
-            }
-        } else {
-            Registrar "GLPI" "ALERTA" "glpi-agent.exe não encontrado"
-        }
-    } catch {
-        Registrar "GLPI" "ERRO" $_.Exception.Message
+        Install-GLPIAgent
     }
-}
 
-# ============================================================
-#  10. LIMPEZA DE PERFIS (>90 dias)
-# ============================================================
-
-function Remove-PerfisAntigos {
-    TUI-Update "Perfis" "EXEC"
-    try {
-        if ($SkipCleaning) { Registrar "Perfis" "SKIP" "SkipCleaning"; return }
-
-        $usuAtual = $env:USERNAME
-        $perfis = Get-CimInstance Win32_UserProfile | Where-Object {
-            $_.LastUseTime -lt (Get-Date).AddDays(-90) -and
-            $_.Special -eq $false -and
-            $_.LocalPath -like "C:\Users\*" -and
-            $_.LocalPath -notmatch "\\Administrador$" -and
-            $_.LocalPath -notmatch "\\Default" -and
-            $_.LocalPath -notmatch "\\Public" -and
-            $_.LocalPath -notmatch "\\$usuAtual$"
-        }
-
-        if (!$perfis) {
-            Registrar "Perfis" "OK" "Nenhum perfil antigo"
+    Invoke-Step -Number 5 -Name 'Instalação do Office via Click-to-Run' -Action {
+        if ($SkipOffice) {
+            Write-Log 'Office ignorado por parâmetro -SkipOffice.' 'AVISO'
             return
         }
-
-        $lista = $perfis | ForEach-Object {
-            $tam = (Get-ChildItem $_.LocalPath -Recurse -ErrorAction SilentlyContinue |
-                    Measure-Object Length -Sum).Sum / 1GB
-            "$($_.LocalPath) ($([math]::Round($tam,1))GB)"
-        }
-
-        $confirma = $true
-        if (!$Silent -and !$DryRun) {
-            $linhaLog = $Script:TUI_StartLine + $Script:Etapas.Count + 3
-            [Console]::SetCursorPosition(0, $linhaLog)
-            Write-Host "  Perfis encontrados:" -ForegroundColor Yellow
-            $lista | ForEach-Object { Write-Host "    - $_" -ForegroundColor DarkYellow }
-            $resp = Read-Host "  Remover perfis antigos? (S/N)"
-            $confirma = $resp -match "^[sS]$"
-        }
-
-        if ($confirma -and !$DryRun) {
-            $perfis | ForEach-Object { Remove-CimInstance $_ }
-            Registrar "Perfis" "OK" "$($perfis.Count) removido(s)"
-        } elseif ($DryRun) {
-            Registrar "Perfis" "SKIP" "DryRun — $($perfis.Count) seriam removidos"
-        } else {
-            Registrar "Perfis" "SKIP" "Cancelado pelo operador"
-        }
-    } catch {
-        Registrar "Perfis" "ERRO" $_.Exception.Message
+        Install-OfficeC2R
     }
-}
 
-# ============================================================
-#  11. LIMPEZA DE DISCO
-# ============================================================
-
-function Invoke-LimpezaDisco {
-    TUI-Update "Disco" "EXEC"
-    try {
-        if ($SkipCleaning) { Registrar "Disco" "SKIP" "SkipCleaning"; return }
-        if ($DryRun)       { Registrar "Disco" "SKIP" "DryRun"; return }
-
-        # Garante que o perfil de limpeza 1 existe no registro
-        $sagePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
-        $categorias = @(
-            "Temporary Files", "Recycle Bin", "Downloaded Program Files",
-            "Internet Cache Files", "Old ChkDsk Files", "System error memory dump files",
-            "Temporary Setup Files", "Windows Error Reporting Files"
-        )
-        foreach ($cat in $categorias) {
-            $key = "$sagePath\$cat"
-            if (Test-Path $key) {
-                Set-ItemProperty -Path $key -Name StateFlags0001 -Value 2 -Type DWord -ErrorAction SilentlyContinue
-            }
-        }
-
-        Start-Process cleanmgr -ArgumentList "/sagerun:1" -Wait -WindowStyle Hidden
-        Start-Process Dism.exe -ArgumentList "/online /Cleanup-Image /StartComponentCleanup /Quiet" -Wait -WindowStyle Hidden
-
-        Remove-Item "C:\Windows\Temp\*"  -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item "$env:TEMP\*"        -Recurse -Force -ErrorAction SilentlyContinue
-
-        Registrar "Disco" "OK" "Limpeza concluída"
-    } catch {
-        Registrar "Disco" "ERRO" $_.Exception.Message
-    }
-}
-
-# ============================================================
-#  12. INVENTÁRIO DE SOFTWARES INSTALADOS
-# ============================================================
-
-function Get-SoftwaresInstalados {
-    TUI-Update "Softwares" "EXEC"
-    try {
-        $paths = @(
-            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
-            "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
-            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
-        )
-
-        $softs = foreach ($p in $paths) {
-            if (Test-Path $p) {
-                Get-ItemProperty $p -ErrorAction SilentlyContinue |
-                    Where-Object { $_.DisplayName } |
-                    Select-Object DisplayName, DisplayVersion, Publisher,
-                        @{ N="InstallDate"; E={ $_.InstallDate } }
-            }
-        }
-
-        $softs = $softs | Sort-Object DisplayName -Unique
-
-        # Salva CSV junto ao log
-        $csvPath = "$($Script:BaseLog)\softwares_$($Script:Hostname)_$($Script:Data).csv"
-        $softs | Export-Csv $csvPath -NoTypeInformation -Encoding UTF8
-
-        Write-Log "Softwares inventariados: $($softs.Count) | CSV: $csvPath" "OK"
-        Registrar "Softwares" "OK" "$($softs.Count) softwares — CSV salvo"
-
-        return $softs
-    } catch {
-        Registrar "Softwares" "ERRO" $_.Exception.Message
-        return $null
-    }
-}
-
-# ============================================================
-#  13. STATUS DA BATERIA
-# ============================================================
-
-function Get-BateriaStatus {
-    TUI-Update "Bateria" "EXEC"
-    try {
-        $bat = Get-WmiObject Win32_Battery -ErrorAction SilentlyContinue
-
-        if (!$bat) {
-            Registrar "Bateria" "SKIP" "Desktop / sem bateria"
+    Invoke-Step -Number 6 -Name 'Drivers do fabricante' -Action {
+        if ($SkipDrivers) {
+            Write-Log 'Drivers ignorados por parâmetro -SkipDrivers.' 'AVISO'
             return
         }
-
-        $saude   = $bat.EstimatedChargeRemaining
-        $status  = switch ($bat.BatteryStatus) {
-            1 { "Descarregando" }
-            2 { "CA conectada" }
-            3 { "Carregando" }
-            default { "Status $($bat.BatteryStatus)" }
-        }
-
-        # Capacidade de design vs atual (quando disponível)
-        $designCap  = $bat.DesignCapacity
-        $fullCap    = $bat.FullChargeCapacity
-        $saudePerc  = if ($designCap -and $fullCap -and $designCap -gt 0) {
-            [math]::Round($fullCap / $designCap * 100)
-        } else { $null }
-
-        $detalhe = "$status | Carga: ${saude}%"
-        if ($saudePerc) { $detalhe += " | Saúde: ${saudePerc}%" }
-
-        if ($saudePerc -and $saudePerc -lt 60) {
-            Registrar "Bateria" "ALERTA" "$detalhe — SUBSTITUIÇÃO RECOMENDADA"
-        } elseif ($saude -lt 20) {
-            Registrar "Bateria" "ALERTA" $detalhe
-        } else {
-            Registrar "Bateria" "OK" $detalhe
-        }
-    } catch {
-        Registrar "Bateria" "ERRO" $_.Exception.Message
+        Install-ManufacturerDrivers
     }
-}
 
-# ============================================================
-#  14. VERIFICAÇÃO DE REBOOT PENDENTE
-# ============================================================
-
-function Test-RebootPendente {
-    TUI-Update "Reboot" "EXEC"
-    try {
-        $pendente = $false
-        $motivos  = @()
-
-        # Windows Update
-        $wuKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
-        if (Test-Path $wuKey) { $pendente = $true; $motivos += "Windows Update" }
-
-        # File rename operations
-        $fro = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -ErrorAction SilentlyContinue).PendingFileRenameOperations
-        if ($fro) { $pendente = $true; $motivos += "PendingFileRename" }
-
-        # Component Based Servicing
-        $cbsKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending"
-        if (Test-Path $cbsKey) { $pendente = $true; $motivos += "CBS" }
-
-        if ($pendente) {
-            Registrar "Reboot" "ALERTA" "Reboot necessário: $($motivos -join ', ')"
-        } else {
-            Registrar "Reboot" "OK" "Nenhum reboot pendente"
+    Invoke-Step -Number 7 -Name 'Windows Update' -Action {
+        if ($SkipWindowsUpdate) {
+            Write-Log 'Windows Update ignorado por parâmetro -SkipWindowsUpdate.' 'AVISO'
+            return
         }
-    } catch {
-        Registrar "Reboot" "ERRO" $_.Exception.Message
+        Start-WindowsUpdateTask
     }
-}
 
-# ============================================================
-#  15. AUDITORIA DE USUÁRIOS LOCAIS
-# ============================================================
-
-function Get-AuditoriaUsuarios {
-    TUI-Update "Usuarios" "EXEC"
-    try {
-        $users = Get-LocalUser | Select-Object Name, Enabled, LastLogon,
-            PasswordExpires, PasswordLastSet,
-            @{ N="SenhaExpirada"; E={ $_.PasswordExpires -and $_.PasswordExpires -lt (Get-Date) } }
-
-        $habilitados = ($users | Where-Object { $_.Enabled }).Count
-        $suspeitos   = ($users | Where-Object { $_.Enabled -and $_.Name -notin @("Administrador","Administrator",$env:USERNAME) }).Count
-
-        Write-Log "Usuários locais: $($users.Count) total, $habilitados habilitados, $suspeitos não-padrão habilitados" "INFO"
-
-        if ($suspeitos -gt 0) {
-            Registrar "Usuarios" "ALERTA" "$habilitados habilitados, $suspeitos não-padrão"
-        } else {
-            Registrar "Usuarios" "OK" "$habilitados habilitados"
-        }
-
-        return $users
-    } catch {
-        Registrar "Usuarios" "ERRO" $_.Exception.Message
-        return $null
+    Invoke-Step -Number 8 -Name 'Finalização' -Action {
+        Write-Log 'Etapa de ativação/licenciamento ainda deve ser definida conforme política interna.' 'AVISO'
     }
+
+    Write-Progress -Activity $Config.ProjectName -Completed
+    Remove-ItemProperty -Path $Config.RunOncePath -Name $Config.RunOnceName -ErrorAction SilentlyContinue
+
+    $finalHostname = Get-StateValue -Name 'Hostname' -Default $env:COMPUTERNAME
+    $finalDomain = Get-StateValue -Name 'DomainDNS' -Default '(não informado)'
+
+    Write-Log '============================================================' 'INFO'
+    Write-Log 'PADRONIZAÇÃO CONCLUÍDA' 'OK'
+    Write-Log "Hostname: $finalHostname" 'INFO'
+    Write-Log "Domínio: $finalDomain" 'INFO'
+    Write-Log "Log: $Global:LogFile" 'INFO'
+    Write-Log '============================================================' 'INFO'
+
+    Write-Host "`n============================================================" -ForegroundColor Cyan
+    Write-Host ' PADRONIZAÇÃO CONCLUÍDA!' -ForegroundColor Cyan
+    Write-Host " Hostname: $finalHostname" -ForegroundColor White
+    Write-Host " Domínio: $finalDomain" -ForegroundColor White
+    Write-Host " Log: $Global:LogFile" -ForegroundColor Gray
+    Write-Host '============================================================' -ForegroundColor Cyan
+
+    # Limpa somente ao final para permitir troubleshooting antes, se necessário.
+    Clear-State
+    Pause
 }
-
-# ============================================================
-#  RELATÓRIO FINAL NO CONSOLE
-# ============================================================
-
-function Show-ChecklistFinal {
-    $duracao = [math]::Round(((Get-Date) - $Script:StartTime).TotalMinutes, 1)
-
-    $linhaFinal = $Script:TUI_StartLine + $Script:Etapas.Count + 5
-    [Console]::SetCursorPosition(0, $linhaFinal)
-
-    $erros   = ($Script:Resultados | Where-Object { $_.Status -eq "ERRO" }).Count
-    $alertas = ($Script:Resultados | Where-Object { $_.Status -eq "ALERTA" }).Count
-
-    Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║                  PREVENTIVA CONCLUÍDA                ║" -ForegroundColor Cyan
-    Write-Host "  ╠══════════════════════════════════════════════════════╣" -ForegroundColor Cyan
-    Write-Host "  ║  Duração : ${duracao} min$(if($DryRun){' [DRY RUN]'})".PadRight(55) + "║" -ForegroundColor Cyan
-    Write-Host "  ║  Erros   : $erros".PadRight(55) + "║" -ForegroundColor $(if($erros -gt 0){"Red"}else{"Cyan"})
-    Write-Host "  ║  Alertas : $alertas".PadRight(55) + "║" -ForegroundColor $(if($alertas -gt 0){"Yellow"}else{"Cyan"})
-    Write-Host "  ║  Log     : $($Script:LogFile)".PadRight(55).Substring(0,54) + "║" -ForegroundColor Cyan
-    Write-Host "  ╚══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-    Write-Host ""
-
-    Write-Log "===== FIM DA PREVENTIVA | Duração: ${duracao}min | Erros: $erros | Alertas: $alertas =====" "INFO"
+catch {
+    Write-ErrorLog 'Erro fatal na execução principal.' $_
+    Write-Host "`nErro fatal. Verifique o log: $Global:LogFile" -ForegroundColor Red
+    Pause
+    exit 1
 }
-
-# ============================================================
-#  ENVIO DO LOG PARA SHARE DE REDE
-# ============================================================
-
-function Send-LogParaShare {
-    if (!$Script:ShareLogs) { return }
-    try {
-        $destino = "$($Script:ShareLogs)\$($Script:Hostname)"
-        if (!(Test-Path $destino)) {
-            New-Item -ItemType Directory -Path $destino -Force | Out-Null
-        }
-        Copy-Item $Script:LogFile -Destination $destino -Force
-        $csv = "$($Script:BaseLog)\softwares_$($Script:Hostname)_$($Script:Data).csv"
-        if (Test-Path $csv) { Copy-Item $csv -Destination $destino -Force }
-        Write-Log "Logs enviados para $destino" "OK"
-    } catch {
-        Write-Log "Falha ao enviar log para share: $_" "ALERTA"
-    }
-}
-
-# ============================================================
-#  MAIN — ORQUESTRAÇÃO
-# ============================================================
-
-# Coleta de informações iniciais (cliente e técnico, se não passados)
-if (!$Silent) {
-    if (!$Cliente) { $Cliente = Read-Host "  Nome do cliente" }
-    if (!$Tecnico) { $Tecnico = Read-Host "  Seu nome (técnico)" }
-}
-
-TUI-Init
-
-$hw      = Get-HardwareInfo
-$internet= Test-Internet
-
-Write-Log "HARDWARE: $($hw.Fabricante) $($hw.Modelo) | CPU: $($hw.CPU) | RAM: $($hw.RAM_Total_GB)GB | Disco: $($hw.Discos) | S/N: $($hw.NumSerie) | Build: $($hw.Build) | IP: $($hw.IPs) | Uptime: $($hw.Uptime_Dias)d" "INFO"
-
-# Etapas sequenciais rápidas
-Set-AdminLocal
-Get-WindowsStatus
-Get-OfficeStatus
-Get-DefenderStatus
-
-# Etapas paralelas (updates — as mais demoradas)
-Start-UpdatesParalelo
-
-# Etapas sequenciais pós-update
-Update-Drivers
-Invoke-GLPIAgent
-Remove-PerfisAntigos
-Invoke-LimpezaDisco
-
-# Inventário e diagnósticos
-$softwares = Get-SoftwaresInstalados
-Get-BateriaStatus
-Test-RebootPendente
-$usuarios  = Get-AuditoriaUsuarios
-
-# Finalização
-Show-ChecklistFinal
-Send-LogParaShare
-
-Write-Host "  Pressione qualquer tecla para fechar..." -ForegroundColor DarkGray
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
