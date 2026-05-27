@@ -1,7 +1,6 @@
 # ============================================================
 #  PREVENTIVA CORPORATIVA - PADRONIZACAO DE MAQUINA
 #  By Eduardo Ferreira
-#  
 # ============================================================
 
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -174,7 +173,7 @@ function Invoke-ProcessWithTimeout {
             Write-Log "$StepName encerrado por timeout" "ALERTA"
         }
         catch {
-            Write-Log "Nao foi possivel encerrar $StepName: $($_.Exception.Message)" "ERRO"
+            Write-Log "Nao foi possivel encerrar ${StepName}: $($_.Exception.Message)" "ERRO"
         }
         return $false
     }
@@ -581,7 +580,7 @@ function Invoke-CleanupStep {
             Write-Log "Temporarios limpos: $Path" "OK"
         }
         catch {
-            Write-Log "Falha ao limpar $Path: $($_.Exception.Message)" "ALERTA"
+            Write-Log "Falha ao limpar ${Path}: $($_.Exception.Message)" "ALERTA"
         }
     }
 
