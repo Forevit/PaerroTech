@@ -9,17 +9,12 @@
 $RustDeskUrl = "https://github.com/rustdesk/rustdesk/releases/download/1.4.7/rustdesk-1.4.7-x86_64.exe"
 $TomlUrl = "https://raw.githubusercontent.com/SEU_USUARIO/SEU_REPOSITORIO/main/RustDesk2.toml"
 
-# -------------------------
-# VALIDAÇÃO ADMIN
-# -------------------------
-$Admin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator
-)
-
-if (-not $Admin) {
-    Write-Host ""
-    Write-Host "Execute o PowerShell como Administrador." -ForegroundColor Red
-    return
+# ============================================================
+# AUTO-ELEVAÇÃO
+# ============================================================
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")) {
+    Start-Process PowerShell -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    Exit
 }
 
 # -------------------------
