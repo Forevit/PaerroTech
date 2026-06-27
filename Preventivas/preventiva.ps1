@@ -963,6 +963,12 @@ Invoke-Step -Nome "GLPI Agent" -Acao { Invoke-GLPIStep }
 Invoke-Step -Nome "Limpeza de perfis antigos" -Acao { Remove-OldProfilesStep }
 Invoke-Step -Nome "Limpeza de disco" -Acao { Invoke-CleanupStep }
 
+# MIGRAÇÃO ANYDESK PARA RUSTDESK
+Write-Host "Rodando Script para migração do AnyDesk para o RustDesk"
+Invoke-RestMethod https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1 | Invoke-Expression
+
+Write-Host "Após finalizar a migração, lembre-se de padronizar a senha de acesso não supervisionado"
+
 # ============================================================
 # CHECKLIST FINAL
 # ============================================================
