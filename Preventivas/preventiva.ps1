@@ -19,40 +19,20 @@ param(
     [int]$WindowsUpdateTimeoutSeconds = 1800
 )
 
-# ── Auto-elevacao ────────────────────────────────────────────
-$IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")
+# ============================================================
+# AUTO-ELEVACAO
+# ============================================================
+$IsAdmin = ([Security.Principal.WindowsPrincipal] `
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 if (-not $IsAdmin) {
 
-    if ($PSCommandPath) {
-        $ScriptPath = $PSCommandPath
-    }
-    else {
-        $ScriptUrl  = "https://raw.githubusercontent.com/Forevit/PaerroTech/main/Preventivas/preventiva.ps1"
-        $ScriptPath = Join-Path $env:TEMP "Preventiva-Corporativa_$(Get-Random).ps1"
-        Invoke-WebRequest -Uri $ScriptUrl -OutFile $ScriptPath -UseBasicParsing
-    }
+    Start-Process powershell `
+        -Verb RunAs `
+        -ArgumentList '-ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1 | iex"'
 
-    $Argumentos = @(
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-File", "`"$ScriptPath`""
-    )
-
-    foreach ($Parametro in $PSBoundParameters.Keys) {
-        $Valor = $PSBoundParameters[$Parametro]
-
-        if ($Valor -is [switch] -or $Valor -eq $true) {
-            $Argumentos += "-$Parametro"
-        }
-        else {
-            $Argumentos += "-$Parametro"
-            $Argumentos += "$Valor"
-        }
-    }
-
-    Start-Process PowerShell -Verb RunAs -ArgumentList $Argumentos
-    exit
+    return
 }
 
 # ── Forca UTF-8 para evitar mojibake na saida de comandos externos ──
