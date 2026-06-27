@@ -13,37 +13,20 @@ $RustDeskKey    = "4XzfD7gwCxuMeW7vjyCRhlwJrU9ovvUAMAkD2x1KFgg="
 # ============================================================
 # AUTO-ELEVACAO
 # ============================================================
-if (-not $IsAdmin) {
-
-    if ($PSCommandPath) {
-        $ScriptPath = $PSCommandPath
-    }
-    else {
-        $ScriptUrl  = "https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1"
-        $ScriptPath = Join-Path $env:TEMP "Preventiva-Corporativa_$(Get-Random).ps1"
-        Invoke-WebRequest -Uri $ScriptUrl -OutFile $ScriptPath -UseBasicParsing
-    }
-
-    $Argumentos = @(
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-File", "`"$ScriptPath`""
+if (-not (
+    ([Security.Principal.WindowsPrincipal]
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
     )
+))
+{
+    Start-Process powershell `
+        -Verb RunAs `
+        -ArgumentList '-ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1 | iex"'
 
-    foreach ($Parametro in $PSBoundParameters.Keys) {
-        $Valor = $PSBoundParameters[$Parametro]
-
-        if ($Valor -is [switch] -or $Valor -eq $true) {
-            $Argumentos += "-$Parametro"
-        }
-        else {
-            $Argumentos += "-$Parametro"
-            $Argumentos += "$Valor"
-        }
-    }
-
-    Start-Process PowerShell -Verb RunAs -ArgumentList $Argumentos
-    exit
+    return
+}
 
 # -------------------------
 # LOG
