@@ -1,0 +1,13 @@
+$RustDeskToml = @'
+rendezvous_server = 'monitor.paerrotecnologia.com.br:21116'
+nat_type = 2
+serial = 0
+unlock_pin = ''
+trusted_devices = '00AeMG8aU+4jH+yp2EHN+LX5UJguMWeGh1ylOG3488G0YCwlO3Nq9jooydVg=='
+
+[options]
+key = '4XzfD7gwCxuMeW7vjyCRhlwJrU9ovvUAMAkD2x1KFgg='
+verification-method = 'use-permanent-password'
+custom-rendezvous-server = 'monitor.paerrotecnologia.com.br'
+av1-test = 'N'
+'@
