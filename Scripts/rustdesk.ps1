@@ -19,15 +19,9 @@ $IsAdmin = ([Security.Principal.WindowsPrincipal] `
 
 if (-not $IsAdmin) {
 
-    $TempScript = Join-Path $env:TEMP "RustDesk.ps1"
-
-    Invoke-WebRequest `
-        -Uri "https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1" `
-        -OutFile $TempScript
-
     Start-Process powershell `
         -Verb RunAs `
-        -ArgumentList "-ExecutionPolicy Bypass -File `"$TempScript`""
+        -ArgumentList '-ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1 | iex"'
 
     return
 }
