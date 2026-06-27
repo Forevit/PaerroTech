@@ -1,30 +1,49 @@
 # ==========================================================
-# Projeto: Implantação RustDesk 
+# Projeto: Migracao AnyDesk -> RustDesk
 # By Eduardo Ferreira | Paerro Tecnologia
 # ==========================================================
 
 # -------------------------
-# CONFIGURAÇÕES
+# CONFIGURACOES
 # -------------------------
-$RustDeskUrl = "https://github.com/rustdesk/rustdesk/releases/download/1.4.7/rustdesk-1.4.7-x86_64.exe"
-$TomlUrl = "https://raw.githubusercontent.com/SEU_USUARIO/SEU_REPOSITORIO/main/RustDesk2.toml"
+$RustDeskUrl    = "https://github.com/rustdesk/rustdesk/releases/download/1.4.8/rustdesk-1.4.8-x86_64.exe"
+$RustDeskServer = "monitor.paerrotecnologia.com.br"
+$RustDeskKey    = "4XzfD7gwCxuMeW7vjyCRhlwJrU9ovvUAMAkD2x1KFgg="
 
 # ============================================================
-# AUTO-ELEVAÇÃO
+# AUTO-ELEVACAO
 # ============================================================
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")) {
-    Start-Process PowerShell -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    Exit
-}
+if (-not $IsAdmin) {
 
-# -------------------------
-# VALIDAÇÃO DE CONFIGURAÇÃO
-# -------------------------
-if ($TomlUrl -match "SEU_USUARIO|SEU_REPOSITORIO") {
-    Write-Host ""
-    Write-Host "Atualize a variavel `$TomlUrl com o link real do RustDesk2.toml antes de executar." -ForegroundColor Red
-    return
-}
+    if ($PSCommandPath) {
+        $ScriptPath = $PSCommandPath
+    }
+    else {
+        $ScriptUrl  = "https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1"
+        $ScriptPath = Join-Path $env:TEMP "Preventiva-Corporativa_$(Get-Random).ps1"
+        Invoke-WebRequest -Uri $ScriptUrl -OutFile $ScriptPath -UseBasicParsing
+    }
+
+    $Argumentos = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "`"$ScriptPath`""
+    )
+
+    foreach ($Parametro in $PSBoundParameters.Keys) {
+        $Valor = $PSBoundParameters[$Parametro]
+
+        if ($Valor -is [switch] -or $Valor -eq $true) {
+            $Argumentos += "-$Parametro"
+        }
+        else {
+            $Argumentos += "-$Parametro"
+            $Argumentos += "$Valor"
+        }
+    }
+
+    Start-Process PowerShell -Verb RunAs -ArgumentList $Argumentos
+    exit
 
 # -------------------------
 # LOG
@@ -48,7 +67,7 @@ function Write-Log {
 }
 
 Write-Log "=================================================="
-Write-Log "Projeto: Implantação RustDesk"
+Write-Log "Projeto: Migracao AnyDesk -> RustDesk"
 Write-Log "By Eduardo Ferreira"
 Write-Log "=================================================="
 
@@ -113,15 +132,45 @@ function Install-RustDesk {
         return
     }
 
-    $Installer = "$env:TEMP\RustDesk.exe"
+    $Installer   = "$env:TEMP\RustDesk.exe"
+    $InstallPath = "$env:ProgramFiles\RustDesk\rustdesk.exe"
 
     Write-Log "Baixando RustDesk"
 
     Invoke-WebRequest -Uri $RustDeskUrl -OutFile $Installer
 
+    # Remove o "Mark of the Web" (zona Internet). Sem isso o SmartScreen
+    # pode tentar exibir um aviso antes de deixar o exe correr, e numa
+    # sessao sem interacao esse aviso nunca e respondido - trava para sempre.
+    Unblock-File -Path $Installer
+
     Write-Log "Instalando RustDesk"
 
-    Start-Process -FilePath $Installer -ArgumentList "--silent-install" -Wait
+    # NAO usar -Wait aqui: em varias versoes o proprio binario continua
+    # rodando como o app/tray depois do --silent-install, e o processo
+    # nunca "termina" sozinho - o -Wait ficaria bloqueado indefinidamente.
+    Start-Process -FilePath $Installer -ArgumentList "--silent-install"
+
+    # Espera ativa pelo BINARIO instalado em vez do processo terminar
+    $Timeout = 60
+    $Elapsed = 0
+    while (-not (Test-Path $InstallPath) -and $Elapsed -lt $Timeout) {
+        Start-Sleep -Seconds 2
+        $Elapsed += 2
+    }
+
+    if (-not (Test-Path $InstallPath)) {
+        throw "Binario do RustDesk nao apareceu em '$InstallPath' apos $Timeout segundos - instalacao pode ter falhado (verifique SmartScreen/antivirus)"
+    }
+
+    Write-Log "Binario do RustDesk encontrado em $InstallPath"
+
+    # Em algumas versoes o --silent-install nao registra o servico do
+    # Windows automaticamente - forca a criacao se ainda nao existir
+    if (-not (Get-Service RustDesk -ErrorAction SilentlyContinue)) {
+        Write-Log "Servico nao encontrado - executando --install-service"
+        Start-Process -FilePath $InstallPath -ArgumentList "--install-service" -Wait
+    }
 
     # Espera ativa pelo servico em vez de Start-Sleep fixo -
     # garante que a instalacao de fato concluiu antes de seguir
@@ -144,7 +193,7 @@ function Install-RustDesk {
 # -------------------------
 function Set-RustDeskConfig {
 
-    Write-Log "Aplicando configuracao"
+    Write-Log "Aplicando configuracao (servidor: $RustDeskServer)"
 
     # IMPORTANTE: o servico RustDesk roda como conta LocalService, nao como
     # o usuario logado. Para acesso unattended funcionar mesmo sem ninguem
@@ -158,9 +207,22 @@ function Set-RustDeskConfig {
         }
     }
 
+    # Conteudo do RustDesk2.toml gerado diretamente, sem depender de
+    # download externo - servidor e key fixos para o ambiente Paerro
+    $TomlContent = @"
+rendezvous_server = '$RustDeskServer'
+nat_type = 1
+serial = 0
+
+[options]
+custom-rendezvous-server = '$RustDeskServer'
+relay-server = '$RustDeskServer'
+key = '$RustDeskKey'
+"@
+
     $TempToml = "$env:TEMP\RustDesk2.toml"
 
-    Invoke-WebRequest -Uri $TomlUrl -OutFile $TempToml
+    Set-Content -Path $TempToml -Value $TomlContent -Encoding UTF8 -NoNewline
 
     Copy-Item $TempToml "$ConfigFolder\RustDesk2.toml" -Force
     Copy-Item $TempToml "$ServiceConfigFolder\RustDesk2.toml" -Force
@@ -168,15 +230,12 @@ function Set-RustDeskConfig {
     # Hash de referencia para a verificacao pos-restart (ver Test-RustDeskConfigIntegrity)
     $script:TomlHashEsperado = (Get-FileHash $TempToml -Algorithm SHA256).Hash
 
-    $ServidorConfigurado = Get-Content $TempToml | Where-Object { $_ -match "rendezvous_server|custom-rendezvous-server" } | Select-Object -First 1
-    if (-not $ServidorConfigurado) { $ServidorConfigurado = "(nao identificado no toml baixado)" }
-
-    Write-Log "Servidor configurado: $ServidorConfigurado"
+    Write-Log "Servidor configurado: $RustDeskServer"
     Write-Log "Arquivo RustDesk2.toml aplicado em perfil de usuario e em LocalService"
 }
 
 # -------------------------
-# VERIFICAÇÃO DE INTEGRIDADE DO CONFIG
+# VERIFICACAO DE INTEGRIDADE DO CONFIG
 # -------------------------
 function Test-RustDeskConfigIntegrity {
 
@@ -213,7 +272,7 @@ function Test-RustDeskConfigIntegrity {
 }
 
 # -------------------------
-# SERVIÇO
+# SERVICO
 # -------------------------
 function Start-RustDeskService {
 
@@ -242,7 +301,7 @@ function Start-RustDeskService {
 }
 
 # -------------------------
-# CONFIRMAÇÃO SENHA
+# CONFIRMACAO SENHA
 # -------------------------
 function Confirm-UnattendedPassword {
 
@@ -278,7 +337,7 @@ function Confirm-UnattendedPassword {
 }
 
 # -------------------------
-# EXECUÇÃO
+# EXECUCAO
 # -------------------------
 try {
 
@@ -292,7 +351,7 @@ try {
 
     Confirm-UnattendedPassword
 
-    Write-Log "Implantacao finalizada com sucesso"
+    Write-Log "Migracao AnyDesk -> RustDesk finalizada com sucesso"
 }
 catch {
 
