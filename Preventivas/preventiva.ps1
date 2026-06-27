@@ -30,7 +30,7 @@ if (-not $IsAdmin) {
 
     Start-Process powershell `
         -Verb RunAs `
-        -ArgumentList '-ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1 | iex"'
+        -ArgumentList '-ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Preventivas/preventiva.ps1 | iex"'
 
     return
 }
