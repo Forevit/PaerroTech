@@ -13,17 +13,21 @@ $RustDeskKey    = "4XzfD7gwCxuMeW7vjyCRhlwJrU9ovvUAMAkD2x1KFgg="
 # ============================================================
 # AUTO-ELEVACAO
 # ============================================================
-if (-not (
-    ([Security.Principal.WindowsPrincipal]
+$IsAdmin = ([Security.Principal.WindowsPrincipal] `
     [Security.Principal.WindowsIdentity]::GetCurrent()
-    ).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator
-    )
-))
-{
+).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $IsAdmin) {
+
+    $TempScript = Join-Path $env:TEMP "RustDesk.ps1"
+
+    Invoke-WebRequest `
+        -Uri "https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1" `
+        -OutFile $TempScript
+
     Start-Process powershell `
         -Verb RunAs `
-        -ArgumentList '-ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1 | iex"'
+        -ArgumentList "-ExecutionPolicy Bypass -File `"$TempScript`""
 
     return
 }
