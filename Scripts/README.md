@@ -42,7 +42,7 @@ Centralizar scripts úteis para:
 ### Execução remota dos scripts disponíveis
 - 🌐 **RustDesk**
 ```powershell
-irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/<script>.ps1 | iex
+irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1 | iex
 ```
 
 
