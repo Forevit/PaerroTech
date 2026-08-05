@@ -418,11 +418,6 @@ function Invoke-WindowsUpdateStep {
         return
     }
 
-    if (-not $script:InternetOK) {
-        Write-Log "Windows Update ignorado: sem internet" "ALERTA"
-        $script:Status_WindowsUpdate = "SEM INTERNET"
-        return
-    }
 
     $script:Status_WindowsUpdate = "ERRO"
 
@@ -660,12 +655,6 @@ function Invoke-WingetStep {
     if ($SkipWinget) {
         Write-Log "Winget ignorado por parametro" "ALERTA"
         $script:Status_Winget = "IGNORADO"
-        return
-    }
-
-    if (-not $script:InternetOK) {
-        Write-Log "Winget ignorado: sem internet" "ALERTA"
-        $script:Status_Winget = "SEM INTERNET"
         return
     }
 
@@ -1000,7 +989,6 @@ $script:Status_Windows       = "NAO VERIFICADO"
 $script:Status_WindowsUpdate = "NAO VERIFICADO"
 $script:Status_Winget        = "NAO VERIFICADO"
 $script:Status_Office        = "NAO VERIFICADO"
-$script:InternetOK           = [bool](Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet -ErrorAction SilentlyContinue)
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
