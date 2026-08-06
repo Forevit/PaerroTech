@@ -29,7 +29,7 @@ $serviceConfigPath  = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\R
 $scriptSelfUrl      = "https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1"
 
 # ---- Preencher antes de rodar em produção ----
-$rustdeskServer         = 'monitor.paerrotecnologia.com.br'
+$rustdeskServer         = 'monitor.paerrotecnologia.com.br:21116'
 $rustdeskKey            = '4XzfD7gwCxuMeW7vjyCRhlwJrU9ovvUAMAkD2x1KFgg='
 $rustdeskPasswordPlain  = 'qaz.123'
 $rustdeskSha256         = ''   # opcional: hash SHA256 do instalador, se quiser validar integridade
