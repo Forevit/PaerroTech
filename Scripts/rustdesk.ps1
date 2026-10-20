@@ -78,6 +78,242 @@ function Get-RustDeskPassword {
     }
 }
 
+function Get-AnyDeskExecutablePaths {
+    $paths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $addPath = {
+        param([string]$Path)
+        if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf) -and
+            [IO.Path]::GetFileName($Path) -match '(?i)^AnyDesk.*\.exe$') {
+            [void]$paths.Add([IO.Path]::GetFullPath($Path))
+        }
+    }
+
+    # Active services/processes capture custom clients and non-default install paths.
+    Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '(?i)AnyDesk' -or $_.DisplayName -match '(?i)AnyDesk' -or $_.PathName -match '(?i)AnyDesk' } |
+        ForEach-Object {
+            $match = [regex]::Match($_.PathName, '^\s*"?(.+?\.exe)"?(?:\s|$)', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if ($match.Success) { & $addPath $match.Groups[1].Value }
+        }
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '(?i)^AnyDesk.*\.exe$' } |
+        ForEach-Object { & $addPath $_.ExecutablePath }
+
+    # Registered installations can live outside the default Program Files folders.
+    $uninstallRoots = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    foreach ($root in $uninstallRoots) {
+        Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -match '(?i)AnyDesk' } |
+            ForEach-Object {
+                if ($_.InstallLocation -and (Test-Path -LiteralPath $_.InstallLocation -PathType Container)) {
+                    Get-ChildItem -LiteralPath $_.InstallLocation -Filter 'AnyDesk*.exe' -File -Recurse -ErrorAction SilentlyContinue |
+                        ForEach-Object { & $addPath $_.FullName }
+                }
+                foreach ($value in @($_.DisplayIcon, $_.UninstallString, $_.QuietUninstallString)) {
+                    if ($value -match '^\s*"?(.+?\.exe)"?(?:,\d+)?(?:\s|$)') {
+                        & $addPath $Matches[1]
+                    }
+                }
+            }
+    }
+
+    # Include standard and custom clients beneath the documented install roots.
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ($root -and (Test-Path -LiteralPath $root)) {
+            Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '(?i)^AnyDesk(?:-|$)' } |
+                ForEach-Object {
+                    Get-ChildItem -LiteralPath $_.FullName -Filter '*.exe' -File -Recurse -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -match '(?i)^AnyDesk.*\.exe$' } |
+                        ForEach-Object { & $addPath $_.FullName }
+                }
+        }
+    }
+    foreach ($profile in (Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue |
+        Where-Object { -not $_.Special -and $_.LocalPath -and (Test-Path -LiteralPath $_.LocalPath) })) {
+        foreach ($relativeRoot in @('AppData\Local\Programs', 'AppData\Roaming\AnyDesk', 'AppData\Local\AnyDesk')) {
+            $searchRoot = Join-Path $profile.LocalPath $relativeRoot
+            if (Test-Path -LiteralPath $searchRoot) {
+                Get-ChildItem -LiteralPath $searchRoot -Filter '*.exe' -File -Recurse -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match '(?i)^AnyDesk.*\.exe$' } |
+                    ForEach-Object { & $addPath $_.FullName }
+            }
+        }
+    }
+    return @($paths | ForEach-Object { $_ })
+}
+
+function Remove-AnyDesk {
+    Write-Log 'Procurando instalações, serviços e processos do AnyDesk...'
+    $executables = @(Get-AnyDeskExecutablePaths)
+
+    foreach ($executable in $executables) {
+        Write-Log "Desinstalando AnyDesk: $executable"
+        $process = Start-Process -FilePath $executable -ArgumentList @('--silent', '--remove') -Wait -PassThru -ErrorAction Stop
+        if ($process.ExitCode -ne 0) {
+            throw "O desinstalador do AnyDesk '$executable' retornou código $($process.ExitCode)."
+        }
+    }
+
+    # O CLI oficial remove a aplicação instalada; pare e exclua serviços que
+    # tenham permanecido registrados após a desinstalação.
+    $services = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '(?i)AnyDesk' -or $_.DisplayName -match '(?i)AnyDesk' -or $_.PathName -match '(?i)AnyDesk' })
+    foreach ($service in $services) {
+        if ($service.State -eq 'Running') {
+            Stop-Service -Name $service.Name -Force -ErrorAction Stop
+            (Get-Service -Name $service.Name -ErrorAction Stop).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+        }
+        & "$env:SystemRoot\System32\sc.exe" delete $service.Name | Out-Null
+        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1060) {
+            throw "Não foi possível remover o serviço AnyDesk '$($service.Name)' (código $LASTEXITCODE)."
+        }
+    }
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '(?i)^AnyDesk.*\.exe$' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+    # Some custom/portable instances are registered outside Program Files.
+    # Remove the exact executable paths discovered before uninstallation.
+    foreach ($executable in $executables) {
+        if (Test-Path -LiteralPath $executable -PathType Leaf) {
+            Remove-Item -LiteralPath $executable -Force -ErrorAction Stop
+        }
+    }
+
+    # Remove sobras de instalações padrão/customizadas e dados de todos os
+    # perfis locais. Isso também elimina IDs, aliases, histórico e configurações.
+    $directories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ($root -and (Test-Path -LiteralPath $root)) {
+            Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '(?i)^AnyDesk(?:-|$)' } |
+                ForEach-Object { [void]$directories.Add($_.FullName) }
+        }
+    }
+    $programDataAnyDesk = Join-Path $env:ProgramData 'AnyDesk'
+    if (Test-Path -LiteralPath $programDataAnyDesk) { [void]$directories.Add($programDataAnyDesk) }
+
+    $profiles = @(Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue |
+        Where-Object { -not $_.Special -and $_.LocalPath -and (Test-Path -LiteralPath $_.LocalPath) })
+    foreach ($profile in $profiles) {
+        foreach ($relativePath in @('AppData\Roaming\AnyDesk', 'AppData\Local\AnyDesk')) {
+            $path = Join-Path $profile.LocalPath $relativePath
+            if (Test-Path -LiteralPath $path) { [void]$directories.Add($path) }
+        }
+        $userPrograms = Join-Path $profile.LocalPath 'AppData\Local\Programs'
+        if (Test-Path -LiteralPath $userPrograms) {
+            Get-ChildItem -LiteralPath $userPrograms -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '(?i)^AnyDesk(?:-|$)' } |
+                ForEach-Object { [void]$directories.Add($_.FullName) }
+        }
+
+        # Remove portable copies and downloaded AnyDesk executables anywhere
+        # inside each local profile; only files whose names identify AnyDesk match.
+        Get-ChildItem -LiteralPath $profile.LocalPath -Filter 'AnyDesk*.exe' -File -Recurse -Force -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop }
+        foreach ($relativePath in @('Desktop', 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs')) {
+            $shortcutRoot = Join-Path $profile.LocalPath $relativePath
+            if (Test-Path -LiteralPath $shortcutRoot) {
+                Get-ChildItem -LiteralPath $shortcutRoot -Filter 'AnyDesk*.lnk' -File -Recurse -ErrorAction SilentlyContinue |
+                    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop }
+            }
+        }
+    }
+    foreach ($shortcutRoot in @((Join-Path $env:PUBLIC 'Desktop'), (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'))) {
+        if (Test-Path -LiteralPath $shortcutRoot) {
+            Get-ChildItem -LiteralPath $shortcutRoot -Filter 'AnyDesk*.lnk' -File -Recurse -ErrorAction SilentlyContinue |
+                ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop }
+        }
+    }
+    foreach ($directory in $directories) {
+        Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction Stop
+    }
+
+    # Limpa inicialização automática e tarefas agendadas que apontem para AnyDesk.
+    $runKeys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce'
+    )
+    foreach ($sidKey in (Get-ChildItem Registry::HKEY_USERS -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSChildName -match '^S-1-5-21-' })) {
+        $runKeys += "Registry::HKEY_USERS\$($sidKey.PSChildName)\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        $runKeys += "Registry::HKEY_USERS\$($sidKey.PSChildName)\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+    }
+    foreach ($runKey in $runKeys) {
+        $values = Get-ItemProperty -LiteralPath $runKey -ErrorAction SilentlyContinue
+        if ($values) {
+            $values.PSObject.Properties |
+                Where-Object { $_.Name -notlike 'PS*' -and [string]$_.Value -match '(?i)AnyDesk' } |
+                ForEach-Object { Remove-ItemProperty -LiteralPath $runKey -Name $_.Name -Force -ErrorAction Stop }
+        }
+    }
+    if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+        $scheduledTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.TaskName -match '(?i)AnyDesk' -or
+                ($_.Actions | Where-Object { $_.Execute -match '(?i)AnyDesk' -or $_.Arguments -match '(?i)AnyDesk' })
+            })
+        foreach ($task in $scheduledTasks) {
+            Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false -ErrorAction Stop
+        }
+    }
+
+    # Delete any registered uninstall records left behind by stale/custom clients.
+    $registryRoots = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    foreach ($sidKey in (Get-ChildItem Registry::HKEY_USERS -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSChildName -match '^S-1-5-21-' })) {
+        $registryRoots += "Registry::HKEY_USERS\$($sidKey.PSChildName)\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    }
+    foreach ($root in $registryRoots) {
+        Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -match '(?i)AnyDesk' } |
+            ForEach-Object { Remove-Item -LiteralPath $_.PSPath -Recurse -Force -ErrorAction Stop }
+    }
+
+    Start-Sleep -Seconds 2
+    $remainingExecutables = @(Get-AnyDeskExecutablePaths)
+    $remainingServices = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '(?i)AnyDesk' -or $_.DisplayName -match '(?i)AnyDesk' -or $_.PathName -match '(?i)AnyDesk' })
+    $remainingProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '(?i)^AnyDesk.*\.exe$' })
+    $remainingDirectories = @()
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ($root -and (Test-Path -LiteralPath $root)) {
+            $remainingDirectories += Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '(?i)^AnyDesk(?:-|$)' }
+        }
+    }
+    if (Test-Path -LiteralPath $programDataAnyDesk) { $remainingDirectories += Get-Item -LiteralPath $programDataAnyDesk }
+    foreach ($profile in $profiles) {
+        foreach ($relativePath in @('AppData\Roaming\AnyDesk', 'AppData\Local\AnyDesk')) {
+            $path = Join-Path $profile.LocalPath $relativePath
+            if (Test-Path -LiteralPath $path) { $remainingDirectories += Get-Item -LiteralPath $path }
+        }
+        $userPrograms = Join-Path $profile.LocalPath 'AppData\Local\Programs'
+        if (Test-Path -LiteralPath $userPrograms) {
+            $remainingDirectories += Get-ChildItem -LiteralPath $userPrograms -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '(?i)^AnyDesk(?:-|$)' }
+        }
+    }
+    if ($remainingExecutables.Count -or $remainingServices.Count -or $remainingProcesses.Count -or $remainingDirectories.Count) {
+        throw 'A verificação final detectou executável, diretório, serviço ou processo AnyDesk ainda presente.'
+    }
+    Write-Log 'AnyDesk removido; executáveis, serviços, processos e dados nos perfis locais foram verificados.'
+}
+
 function ConvertTo-WindowsCommandLineArgument {
     param([Parameter(Mandatory)][string]$Value)
     # Escaping segundo as regras de quoting do CommandLineToArgvW.
@@ -207,6 +443,7 @@ verification-method = 'use-permanent-password'
     $passwordProcess.WaitForExit()
     if ($passwordProcess.ExitCode -ne 0) { throw "RustDesk recusou a definição da senha (código $($passwordProcess.ExitCode))." }
     Write-Log 'Senha definida via CLI; o comando retornou sucesso.'
+    Remove-AnyDesk
     Write-Output 'RustDesk instalado/configurado. A senha foi aplicada com sucesso.'
 } catch {
     Write-Log $_.Exception.Message 'ERROR'

@@ -36,7 +36,7 @@ Centralizar scripts úteis para:
 
 | Script | Descrição |
 |---|---|
-| `rustdesk.ps1` | Instala/atualiza o RustDesk 1.4.9, verifica o SHA-256 publicado pelo projeto, configura o servidor próprio nos perfis do usuário interativo e LocalService, reinicia e valida o serviço e solicita a senha permanente via CLI. |
+| `rustdesk.ps1` | Instala/atualiza o RustDesk 1.4.9, verifica o SHA-256 publicado pelo projeto, configura o servidor próprio nos perfis do usuário interativo e LocalService, valida o serviço e a senha, e remove o AnyDesk instalado e seus dados residuais nos perfis locais. |
 
 
 ### Execução remota dos scripts disponíveis
@@ -99,6 +99,7 @@ Seguindo o padrão de logs definido no README principal do repositório.
 * ✔ Na execução interativa, a senha é solicitada sem eco no terminal
 * ✔ Em automações, o script aceita `RUSTDESK_PASSWORD` no ambiente; um GitHub Secret só é disponibilizado a um workflow do Actions que o injete nessa variável (por exemplo, em um self-hosted runner autorizado)
 * ⚠️ O comando CLI do RustDesk recebe a senha como argumento de processo; restrinja quem pode inspecionar processos no dispositivo e use uma senha única por máquina
+* ⚠️ A remoção do AnyDesk apaga configurações, IDs, aliases e histórico de sessão de todos os perfis locais; faça backup antes se esses dados forem necessários
 * ✔ Validar scripts antes da execução
 * ❌ Evitar fontes externas não confiáveis
 
