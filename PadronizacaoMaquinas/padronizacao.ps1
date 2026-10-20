@@ -319,7 +319,9 @@ if ($etapaAtual -lt 1) {
                     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr2)
                 } while ($pass1 -ne $pass2)
 
-                Set-LocalUser -Name "Administrador" -Password $adminPass -PasswordNeverExpires $true -ErrorAction Stop
+                # Respeita a política de expiração do domínio/dispositivo;
+                # contas locais corporativas devem ter rotação gerenciada (ex.: Windows LAPS).
+                Set-LocalUser -Name "Administrador" -Password $adminPass -ErrorAction Stop
                 Write-Log "Senha do Administrador local definida." "OK"
 
                 $pass1 = $null
@@ -370,9 +372,7 @@ if ($etapaAtual -lt 2) {
         Write-Host "Após o upgrade e reinício, o script continuará automaticamente." -ForegroundColor Gray
         Write-Host "============================================`n" -ForegroundColor Yellow
 
-        Invoke-RestMethod https://get.activated.win | Invoke-Expression
-
-        Write-Log "Upgrade Home -> Pro pendente de execução/configuração." "AVISO"
+        Write-Log "Upgrade Home -> Pro pendente. Faça o upgrade com uma licença válida pelos canais oficiais da Microsoft e execute novamente após o reboot." "AVISO"
         pause
         Exit
     }
@@ -625,14 +625,8 @@ if ($etapaAtual -lt 9) {
     Write-Host "   ATIVAÇÃO / LICENCIAMENTO" -ForegroundColor Yellow
     Write-Host "============================================" -ForegroundColor Yellow
 
-    try {
-       Invoke-RestMethod https://get.activated.win | Invoke-Expression
-
-
-        Write-Log "Bloco de ativação/licenciamento executado ou mantido para validação manual." "AVISO"
-    } catch {
-        Write-LogErro "Falha durante ativação/licenciamento." $_
-    }
+    Write-Host "Conclua a ativação do Windows e do Office usando licenças válidas e os canais oficiais da organização/Microsoft." -ForegroundColor Yellow
+    Write-Log "Ativação delegada ao processo de licenciamento da organização; nenhum código remoto foi executado." "AVISO"
 
     Set-Etapa 9
 }
