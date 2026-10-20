@@ -184,7 +184,7 @@ O script é dividido em etapas:
 3. Instalação de aplicativos
 4. Instalação do GLPI Agent
 5. Instalação do Office + drivers
-6. Ativação do sistema
+6. Conferência manual de licenças e ativação pelos canais oficiais
 
 ✔️ O script continua automaticamente após reinicialização
 ✔️ O estado é salvo no registro do Windows

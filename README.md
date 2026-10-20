@@ -47,9 +47,9 @@ Este ambiente reúne scripts utilizados no dia a dia para:
 ```
 
 📁 PaerroTech
-├── 📁 Padronizacao-Maquinas/   → Setup completo de estações
+├── 📁 PadronizacaoMaquinas/    → Setup completo de estações
 ├── 📁 Preventivas/             → Rotinas de manutenção
-├── 📁 ScriptsMikrotik          → Scripts de FailOver + LoadBalance
+├── 📁 ScriptsMikrotik/         → Scripts de FailOver + LoadBalance
 ├── 📁 Scripts/                 → Utilitários diversos
 └── README.md
 
@@ -111,7 +111,7 @@ Executar tudo com controle e boas práticas
 
 ## 📝 Padrão de Logs
 
-Todos os scripts devem registrar logs em:
+Os scripts devem registrar logs sob:
 
 ```
 C:\Users\Public\Documents\Logs\

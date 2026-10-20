@@ -36,14 +36,16 @@ Centralizar scripts úteis para:
 
 | Script | Descrição |
 |---|---|
-| `rustdesk.ps1` | Remove o AnyDesk, instala o RustDesk e aplica a configuração do servidor próprio (`monitor.paerrotecnologia.com.br`) em perfil de usuário **e** LocalService. Valida integridade do `RustDesk2.toml` pós-restart e guia a definição da senha padrão de acesso não supervisionado via CLI. |
+| `rustdesk.ps1` | Instala/atualiza o RustDesk 1.4.9, verifica o SHA-256 publicado pelo projeto, configura o servidor próprio nos perfis do usuário interativo e LocalService, reinicia e valida o serviço e solicita a senha permanente via CLI. |
 
 
 ### Execução remota dos scripts disponíveis
 - 🌐 **RustDesk**
 ```powershell
-irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1 | iex
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/Scripts/rustdesk.ps1 | iex"
 ```
+
+Abra o PowerShell **como Administrador** antes de executar o comando remoto. Para execução local, execute `rustdesk.ps1` em uma sessão elevada. A elevação automática não é usada quando o script chega por `irm | iex`, pois o conteúdo seria baixado novamente durante a elevação.
 
 
 > Novos scripts serão listados aqui conforme adicionados.
@@ -81,7 +83,7 @@ cd Scripts
 
 ## 📝 Logs
 
-Os scripts desta pasta registram logs em:
+O script RustDesk registra logs em:
 
 ```
 C:\Users\Public\Documents\Logs\Outros\
@@ -94,7 +96,9 @@ Seguindo o padrão de logs definido no README principal do repositório.
 ## 🔐 Segurança
 
 * ❌ Nunca embutir senhas de acesso remoto em texto plano no script ou no repositório
-* ✔ Senhas padronizadas (ex: acesso não supervisionado) são definidas manualmente via CLI pelo técnico, nunca commitadas
+* ✔ Na execução interativa, a senha é solicitada sem eco no terminal
+* ✔ Em automações, o script aceita `RUSTDESK_PASSWORD` no ambiente; um GitHub Secret só é disponibilizado a um workflow do Actions que o injete nessa variável (por exemplo, em um self-hosted runner autorizado)
+* ⚠️ O comando CLI do RustDesk recebe a senha como argumento de processo; restrinja quem pode inspecionar processos no dispositivo e use uma senha única por máquina
 * ✔ Validar scripts antes da execução
 * ❌ Evitar fontes externas não confiáveis
 
