@@ -62,14 +62,14 @@ function ConvertTo-TomlString {
 
 function Get-RustDeskPassword {
     if (-not [string]::IsNullOrWhiteSpace($env:RUSTDESK_PASSWORD)) {
-        if ($env:RUSTDESK_PASSWORD.Length -lt 12) { throw 'RUSTDESK_PASSWORD deve ter pelo menos 12 caracteres.' }
+        if ($env:RUSTDESK_PASSWORD.Length -lt 8) { throw 'RUSTDESK_PASSWORD deve ter pelo menos 8 caracteres.' }
         return $env:RUSTDESK_PASSWORD
     }
     if (-not [Environment]::UserInteractive) {
         throw 'Defina RUSTDESK_PASSWORD no ambiente de execução. Em GitHub Actions, mapeie o secret para essa variável no job.'
     }
     $secure = Read-Host 'Senha permanente do RustDesk' -AsSecureString
-    if ($secure.Length -lt 12) { $secure.Dispose(); throw 'A senha deve ter pelo menos 12 caracteres.' }
+    if ($secure.Length -lt 8) { $secure.Dispose(); throw 'A senha deve ter pelo menos 8 caracteres.' }
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
     finally {
