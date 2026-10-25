@@ -1,5 +1,10 @@
 ﻿[CmdletBinding()]
-param([string]$ScriptPath = (Join-Path $PSScriptRoot '..\padronizacao.ps1'))
+param([string]$ScriptPath)
+if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
+    $testRoot = $PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($testRoot)) { $testRoot = Split-Path -Parent $MyInvocation.MyCommand.Path }
+    $ScriptPath = Join-Path $testRoot '..\padronizacao.ps1'
+}
 $ErrorActionPreference = 'Stop'
 $resolved = (Resolve-Path -LiteralPath $ScriptPath).Path
 $source = Get-Content -LiteralPath $resolved -Raw

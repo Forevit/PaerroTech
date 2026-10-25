@@ -343,7 +343,7 @@ function Instalar-DriversFabricante {
             }
 
             default {
-                Write-Log "Fabricante '$fabricante' não mapeado. Nenhum driver instalado automaticamente." "AVISO"
+                Write-Log "Fabricante '$fabricante' não mapeado; etapa opcional não executou instalação automática." "INFO"
                 $ok = $false
             }
         }
@@ -396,7 +396,7 @@ try {
 }
 
 if ($etapaAtual -gt 0) {
-    Write-Log "Retomando a partir da etapa $etapaAtual após reboot." "AVISO"
+    Write-Log "Retomando a partir da etapa $etapaAtual após reboot." "INFO"
 }
 
 # ============================================================
@@ -431,7 +431,7 @@ if ($etapaAtual -lt 1) {
                     $pass2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($ptr2)
 
                     if ($pass1 -ne $pass2) {
-                        Write-Log "As senhas não coincidem. Tente novamente." "AVISO"
+                        Write-Log "As senhas não coincidem. Tente novamente." "INFO"
                     }
 
                     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr1)
@@ -502,7 +502,7 @@ if ($etapaAtual -lt 2) {
         Write-Log "Microsoft Office já está instalado." "OK"
         Set-DadoSalvo "OfficeInstalado" "1"
     } else {
-        Write-Log "Microsoft Office não encontrado. Instalação será executada na etapa de Office." "AVISO"
+        Write-Log "Microsoft Office não encontrado. Instalação será executada na etapa de Office." "INFO"
         Set-DadoSalvo "OfficeInstalado" "0"
     }
 
@@ -604,7 +604,7 @@ if ($etapaAtual -lt 3) {
             default {
                 Set-DadoSalvo "Hostname" $env:COMPUTERNAME
                 Set-DadoSalvo "Dominio" "Etapa pulada"
-                Write-Log "Etapa de hostname/domínio pulada pelo técnico." "AVISO"
+                Write-Log "Etapa de hostname/domínio pulada pelo técnico." "INFO"
             }
         }
     } catch {
@@ -647,7 +647,7 @@ if ($etapaAtual -lt 4) {
             Write-Log "Continuando sem Windows Update." "AVISO"
         }
     } else {
-        Write-Log "Windows Update pulado pelo técnico." "AVISO"
+        Write-Log "Windows Update pulado pelo técnico." "INFO"
     }
 
     Set-Etapa 4
@@ -725,7 +725,7 @@ if ($etapaAtual -lt 6) {
             Write-LogErro "Falha ao instalar GLPI Agent." $_
         }
     } else {
-        Write-Log "Instalação do GLPI Agent pulada pelo técnico." "AVISO"
+        Write-Log "Instalação do GLPI Agent pulada pelo técnico." "INFO"
     }
 
     Set-Etapa 6
@@ -742,7 +742,7 @@ if ($etapaAtual -lt 7) {
         Write-Log "Office já está instalado. Pulando instalação." "OK"
         Set-DadoSalvo "OfficeInstalado" "1"
     } else {
-        Write-Log "Office não encontrado. Instalando via link C2R Microsoft 365 Apps." "AVISO"
+        Write-Log "Office não encontrado. Instalando via link C2R Microsoft 365 Apps." "INFO"
         if (Instalar-OfficeMicrosoft365) { Set-DadoSalvo 'OfficeInstalado' '1' } else { Set-DadoSalvo 'OfficeInstalado' '0' }
     }
 
@@ -759,7 +759,7 @@ if ($etapaAtual -lt 8) {
     if (Confirmar-Etapa "Instalar/atualizar drivers do fabricante") {
         if (-not (Instalar-DriversFabricante)) { Set-DadoSalvo 'DriversStatus' 'Verificação manual necessária' }
     } else {
-        Write-Log "Etapa de drivers pulada pelo técnico." "AVISO"
+        Write-Log "Etapa de drivers pulada pelo técnico." "INFO"
     }
 
     Set-Etapa 8
@@ -777,7 +777,7 @@ if ($etapaAtual -lt 9) {
     Write-Host "============================================" -ForegroundColor Yellow
 
     Write-Host "Conclua a ativação do Windows e do Office usando licenças válidas e os canais oficiais da organização/Microsoft." -ForegroundColor Yellow
-    Write-Log "Ativação delegada ao processo de licenciamento da organização; nenhum código remoto foi executado." "AVISO"
+    Write-Log "Ativação delegada ao processo de licenciamento da organização; nenhum código remoto foi executado." "INFO"
 
     Set-Etapa 9
 }
