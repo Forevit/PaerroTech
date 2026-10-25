@@ -167,10 +167,100 @@ function Get-ExistingRustDeskInstallation {
             (Join-Path $env:LOCALAPPDATA 'Programs\RustDesk\rustdesk.exe'),
             (Join-Path $env:LOCALAPPDATA 'RustDesk\rustdesk.exe')
         ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
-        if ($knownPaths.Count -gt 0) {
-            throw 'Foi encontrado rustdesk.exe em um caminho conhecido, mas sem registro de desinstalação que permita validar sua origem. Instalação ambígua; nenhuma alteração foi feita.'
+        $knownPaths = @($knownPaths)
+        # RustDesk 1.5.0 first consults its InstallState key, then falls back
+        # to %ProgramFiles%\RustDesk. Require corroborating service and file
+        # metadata before treating either location as installed.
+        $installStateRoot = 'HKLM:\SOFTWARE\RustDesk\InstallState\RustDesk'
+        $installState = if (Test-Path -LiteralPath $installStateRoot) {
+            Get-ItemProperty -LiteralPath $installStateRoot -ErrorAction Stop
+        } else { $null }
+        $installLocation = $null
+        if ($installState -and -not [string]::IsNullOrWhiteSpace([string]$installState.InstallLocation)) {
+            if (-not [IO.Path]::IsPathRooted([string]$installState.InstallLocation)) {
+                throw "InstallLocation em '$installStateRoot' não é absoluto. Nenhum executável foi iniciado."
+            }
+            $installLocation = [IO.Path]::GetFullPath([string]$installState.InstallLocation)
         }
-        return $null
+        $installStateExe = if ($installLocation) { [IO.Path]::GetFullPath((Join-Path $installLocation 'rustdesk.exe')) } else { $null }
+        if ($installStateExe -and (Test-Path -LiteralPath $installStateExe -PathType Leaf)) {
+            $knownPaths += $installStateExe
+        }
+        if ($knownPaths.Count -eq 0) {
+            if ($installStateExe) {
+                throw "O registro oficial de instalação RustDesk informa '$installLocation', mas rustdesk.exe não existe nesse local. Verifique InstallLocation e o serviço RustDesk; nenhum executável foi iniciado."
+            }
+            return $null
+        }
+
+        $defaultPath = [IO.Path]::GetFullPath($rustdeskDefaultExePath)
+        $defaultCandidate = @($knownPaths | Where-Object {
+            [string]::Equals([IO.Path]::GetFullPath($_), $defaultPath, [StringComparison]::OrdinalIgnoreCase)
+        }) | Select-Object -First 1
+        $candidatePath = $null
+        if ($installLocation) {
+            $candidatePath = $installStateExe
+            if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) {
+                throw "O registro oficial de instalação RustDesk informa '$installLocation', mas rustdesk.exe não existe nesse local. Arquivos conhecidos: $($knownPaths -join '; '). Verifique InstallLocation e o serviço RustDesk; nenhum executável foi iniciado."
+            }
+        } elseif ($defaultCandidate) {
+            $candidatePath = $defaultPath
+        }
+
+        try {
+            $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='RustDesk'" -ErrorAction Stop
+        } catch {
+            throw "Não foi possível consultar Win32_Service para confirmar Name, State, StartMode, StartName e ImagePath do serviço RustDesk: $($_.Exception.Message). Nenhum executável foi iniciado."
+        }
+        $serviceExe = $null
+        $serviceArgs = $null
+        if ($service -and [string]$service.PathName -match '^\s*"(?<exe>[^"]+\.exe)"\s*(?<args>.*?)\s*$') {
+            $serviceExe = [IO.Path]::GetFullPath($Matches['exe'])
+            $serviceArgs = [string]$Matches['args']
+        }
+        $serviceMatchesCandidate = $service -and $candidatePath -and
+            $serviceExe -and
+            [string]::Equals($serviceExe, $candidatePath, [StringComparison]::OrdinalIgnoreCase) -and
+            $serviceArgs -match '(?i)(?:^|\s)--service(?:\s|$)' -and
+            [string]$service.StartMode -eq 'Auto'
+
+        if (-not $serviceMatchesCandidate) {
+            $pathsText = ($knownPaths -join '; ')
+            $serviceText = if ($service) {
+                "Name=$($service.Name); State=$($service.State); StartMode=$($service.StartMode); StartName=$($service.StartName); ImagePath=$($service.PathName)"
+            } else {
+                'serviço Win32 chamado RustDesk não encontrado'
+            }
+            $registryText = if ($installLocation) { "InstallLocation=$installLocation" } else { 'InstallLocation ausente em HKLM\SOFTWARE\RustDesk\InstallState\RustDesk' }
+            throw "Há rustdesk.exe sem registro de desinstalação, mas as evidências não confirmam uma instalação RustDesk. $registryText. Arquivos conhecidos: $pathsText. Serviço: $serviceText. Para reconhecimento automático, confirme InstallLocation válido ou o caminho padrão '$defaultPath', metadados RustDesk e serviço RustDesk automático apontando para o mesmo executável com --service. Nenhum executável foi iniciado; instalação ambígua, nenhuma alteração feita."
+        }
+
+        $file = Get-Item -LiteralPath $candidatePath -ErrorAction Stop
+        if ([string]$file.VersionInfo.ProductName -notmatch '(?i)RustDesk' -or
+            [string]$file.VersionInfo.OriginalFilename -ine 'rustdesk.exe') {
+            throw "O serviço RustDesk aponta para '$candidatePath', mas os metadados do executável não identificam RustDesk/rustdesk.exe. Nenhum binário foi iniciado; instalação ambígua."
+        }
+        $version = Get-InstalledVersion -Path $candidatePath
+        if (-not $version) { throw 'O executável no caminho padrão não tem versão legível; nenhuma alteração foi feita.' }
+        $signature = Get-AuthenticodeSignature -LiteralPath $candidatePath
+        if ($signature.Status -eq [Management.Automation.SignatureStatus]::Valid) {
+            if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)RustDesk|Purslane') {
+                throw 'O executável no caminho padrão tem assinatura válida, mas o signatário não corresponde ao RustDesk; nenhuma alteração foi feita.'
+            }
+            $origin = 'Registro InstallState/caminho padrão do RustDesk 1.5.0, metadados, Authenticode RustDesk/Purslane e serviço automático correspondente confirmados.'
+        } elseif ($signature.Status -eq [Management.Automation.SignatureStatus]::NotSigned) {
+            $origin = 'Registro InstallState/caminho padrão do RustDesk 1.5.0, metadados e serviço automático correspondente confirmados. Arquivo sem assinatura: origem do binário não pode ser comprovada criptograficamente.'
+            Write-ConsoleMessage $origin 'AVISO'
+        } else {
+            throw "Authenticode do executável no caminho padrão não é confiável (status: $($signature.Status)); nenhuma alteração foi feita."
+        }
+        Write-ConsoleMessage ("Serviço RustDesk existente: estado {0}, inicialização {1}, conta {2}; ImagePath corresponde ao executável padrão." -f $service.State, $service.StartMode, $service.StartName) 'INFO'
+        return [pscustomobject]@{
+            Path = $candidatePath
+            Version = $version
+            Origin = $origin
+            RequiresReleaseDigest = ($signature.Status -eq [Management.Automation.SignatureStatus]::NotSigned)
+        }
     }
 
     $candidates = @{}
@@ -245,11 +335,53 @@ function Invoke-RustDesk {
 }
 
 function Get-RustDeskOption {
-    param([Parameter(Mandatory)][string]$Name)
-    $output = & $rustdeskExePath --option $Name 2>$null
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) { throw "Não foi possível consultar a opção '$Name' (código $exitCode)." }
-    return (@($output) -join "`n").Trim()
+    param(
+        [Parameter(Mandatory)][ValidateSet('custom-rendezvous-server','key','relay-server')][string]$Name,
+        [Parameter(Mandatory)][string]$ExpectedValue
+    )
+    $process = New-Object System.Diagnostics.Process
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $rustdeskExePath
+    $startInfo.Arguments = '--option ' + $Name
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { throw 'Process.Start retornou false.' }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        # Capture immediately after exit; do not depend on the caller's $LASTEXITCODE.
+        $exitCode = $process.ExitCode
+        $output = $stdoutTask.Result.Trim()
+        $errorOutput = $stderrTask.Result.Trim()
+    } catch {
+        throw "Não foi possível executar a consulta --option '$Name': $($_.Exception.Message)"
+    } finally {
+        $process.Dispose()
+    }
+
+    $outputLength = $output.Length
+    $errorLength = $errorOutput.Length
+    $outputKind = if ([string]::IsNullOrWhiteSpace($output)) { 'empty' }
+        elseif ($output -eq 'Settings are disabled!') { 'settings-disabled' }
+        elseif ($output -eq 'Installation and administrative privileges required!') { 'installation-or-privilege-message' }
+        elseif ([string]::Equals($output, $ExpectedValue, [StringComparison]::Ordinal)) { 'matches-expected' }
+        else { 'nonmatching-value-or-diagnostic' }
+    Write-Log ("Diagnóstico --option {0}: ExitCode={1}; stdoutChars={2}; stdoutKind={3}; stderrChars={4}. Conteúdo omitido." -f $Name, $exitCode, $outputLength, $outputKind, $errorLength)
+    if ($exitCode -ne 0) {
+        throw "A consulta --option '$Name' terminou com ExitCode=$exitCode; stdoutChars=$outputLength; stderrChars=$errorLength. Conteúdo omitido."
+    }
+    if ([string]::IsNullOrWhiteSpace($output) -or
+        $output -match '(?i)^(Settings are disabled!|Installation and administrative privileges required!)$') {
+        throw "A CLI não retornou um valor utilizável para --option '$Name' (ExitCode=$exitCode; stdoutChars=$outputLength; stderrChars=$errorLength). A saída vazia ou mensagem diagnóstica não é tratada como configuração válida."
+    }
+    if (-not [string]::Equals($output, $ExpectedValue, [StringComparison]::Ordinal)) {
+        throw "A CLI retornou valor divergente para --option '$Name' (ExitCode=$exitCode; stdoutChars=$outputLength; stderrChars=$errorLength). O conteúdo não foi registrado."
+    }
+    return $output
 }
 
 function ConvertTo-WindowsCommandLineArgument {
@@ -338,6 +470,23 @@ function Get-RustDeskRelease {
     return [pscustomobject]@{ Asset = $asset; Version = $targetVersion }
 }
 
+function Get-RustDeskReleaseAssetByVersion {
+    param([Parameter(Mandatory)][version]$Version)
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $releaseUri = 'https://api.github.com/repos/rustdesk/rustdesk/releases/tags/{0}' -f $Version.ToString()
+    $release = Invoke-RestMethod -Uri $releaseUri -Method Get -UseBasicParsing -Headers @{ 'Accept' = 'application/vnd.github+json'; 'User-Agent' = 'PaerroTech-RustDesk-Installer' }
+    if ($release.draft -or $release.prerelease -or $release.tag_name -ne $Version.ToString()) {
+        throw "A API não retornou o release estável esperado para validar a instalação existente ($Version)."
+    }
+    $assetName = 'rustdesk-{0}-x86_64.exe' -f $release.tag_name
+    $asset = @($release.assets | Where-Object { $_.name -eq $assetName }) | Select-Object -First 1
+    if (-not $asset -or $asset.digest -notmatch '^sha256:([0-9a-fA-F]{64})$' -or
+        $asset.browser_download_url -notmatch '^https://github\.com/rustdesk/rustdesk/releases/download/') {
+        throw "O release oficial $Version não disponibiliza asset Windows x64 e digest SHA-256 válidos para conferir o executável instalado."
+    }
+    return $asset
+}
+
 function Configure-RustDesk {
     param([Parameter(Mandatory)][version]$Version)
     if ($Version -gt $configSyntaxValidatedThrough) {
@@ -357,14 +506,11 @@ function Configure-RustDesk {
 
     # O código 1.5.0 ignora silenciosamente strings não reconhecidas e ainda retorna;
     # consulte o estado atual por --option para não confiar apenas no exit code.
-    $actualHost = Get-RustDeskOption -Name 'custom-rendezvous-server'
-    $actualKey = Get-RustDeskOption -Name 'key'
-    $actualRelay = Get-RustDeskOption -Name 'relay-server'
     $expectedHost = '{0}:{1}' -f $rustdeskServer, $rendezvousPort
     $expectedRelay = '{0}:{1}' -f $rustdeskServer, $relayPort
-    if ($actualHost -ne $expectedHost -or $actualKey -ne $rustdeskKey -or $actualRelay -ne $expectedRelay) {
-        throw 'A leitura posterior das opções não corresponde ao host, à chave pública e ao relay PaerroTech.'
-    }
+    $null = Get-RustDeskOption -Name 'custom-rendezvous-server' -ExpectedValue $expectedHost
+    $null = Get-RustDeskOption -Name 'key' -ExpectedValue $rustdeskKey
+    $null = Get-RustDeskOption -Name 'relay-server' -ExpectedValue $expectedRelay
     $service = Get-Service -Name 'rustdesk' -ErrorAction Stop
     $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(45))
     return 'Serviço estava Running antes da configuração; --config aplicado e host, chave e relay conferidos por --option. Reinicialização ainda não testada.'
@@ -550,6 +696,16 @@ if ($fatalErrors.Count -eq 0) {
 Write-Stage 4 'Instalando ou verificando o RustDesk'
 if ($fatalErrors.Count -eq 0) {
     try {
+        if ($existingInstallation -and $existingInstallation.RequiresReleaseDigest) {
+            $existingAsset = Get-RustDeskReleaseAssetByVersion -Version $installedVersion.Version
+            $installedHash = (Get-FileHash -LiteralPath $rustdeskExePath -Algorithm SHA256).Hash
+            $expectedInstalledHash = $existingAsset.digest.Substring(7)
+            if ($installedHash -ine $expectedInstalledHash) {
+                throw "O executável sem assinatura em '$rustdeskExePath' não coincide com o SHA-256 do asset oficial RustDesk $($installedVersion.Version). Nenhum executável foi iniciado; verifique a instalação manualmente."
+            }
+            $existingInstallation.Origin = 'Registro InstallState/caminho padrão, metadados e serviço automático correspondem; SHA-256 do executável coincide com o asset oficial da versão.'
+            Write-ConsoleMessage 'SHA-256 do executável instalado sem assinatura confere com o asset oficial da versão detectada.' 'OK'
+        }
         if ($installedVersion -and $installedVersion.Version -lt $releaseInfo.Version -and
             -not [string]::Equals([IO.Path]::GetFullPath($rustdeskExePath), [IO.Path]::GetFullPath($rustdeskDefaultExePath), [StringComparison]::OrdinalIgnoreCase)) {
             throw 'A instalação antiga está fora do caminho padrão. Não conheço um parâmetro de atualização validado para esse caminho; atualize manualmente para evitar uma segunda instalação.'
@@ -609,14 +765,11 @@ if ($fatalErrors.Count -eq 0) {
 Write-Stage 7 'Validando o resultado local'
 if ($fatalErrors.Count -eq 0) {
     try {
-        $actualHost = Get-RustDeskOption -Name 'custom-rendezvous-server'
-        $actualKey = Get-RustDeskOption -Name 'key'
-        $actualRelay = Get-RustDeskOption -Name 'relay-server'
         $expectedHost = '{0}:{1}' -f $rustdeskServer, $rendezvousPort
         $expectedRelay = '{0}:{1}' -f $rustdeskServer, $relayPort
-        if ($actualHost -ne $expectedHost -or $actualKey -ne $rustdeskKey -or $actualRelay -ne $expectedRelay) {
-            throw 'A leitura local de host, chave pública ou relay não corresponde aos valores PaerroTech.'
-        }
+        $null = Get-RustDeskOption -Name 'custom-rendezvous-server' -ExpectedValue $expectedHost
+        $null = Get-RustDeskOption -Name 'key' -ExpectedValue $rustdeskKey
+        $null = Get-RustDeskOption -Name 'relay-server' -ExpectedValue $expectedRelay
         $service = Get-Service -Name 'rustdesk' -ErrorAction Stop
         $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(45))
         if (-not (Test-Path -LiteralPath $rustdeskExePath -PathType Leaf)) { throw 'O executável RustDesk não está presente.' }
