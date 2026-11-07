@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 #  SCRIPT DE PADRONIZAÇÃO DE MÁQUINA CORPORATIVA
 #  by Eduardo Ferreira | Paerro Tecnologia
 # ============================================================
@@ -6,9 +6,26 @@
 # ============================================================
 # AUTO-ELEVAÇÃO
 # ============================================================
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")) {
-    Start-Process PowerShell -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    Exit
+$scriptPath = $PSCommandPath
+if ([string]::IsNullOrWhiteSpace($scriptPath) -or -not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+    Write-Error "Este script precisa ser executado como arquivo .ps1. Baixe-o para um arquivo e execute com PowerShell -File; execução por irm | iex não permite retomada segura."
+    exit 2
+}
+$scriptPath = (Resolve-Path -LiteralPath $scriptPath).Path
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    try {
+        $hostExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (-not (Test-Path -LiteralPath $hostExe)) { throw 'Windows PowerShell 5.1 não foi encontrado.' }
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+        $elevated = Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $arguments -PassThru -ErrorAction Stop
+        if (-not $elevated) { throw 'O Windows não iniciou o processo elevado.' }
+    } catch {
+        Write-Error "Não foi possível elevar o script. Confirme a aprovação do UAC e tente novamente. Detalhe: $($_.Exception.GetType().Name)"
+        exit 3
+    }
+    exit 0
 }
 
 # ============================================================
@@ -16,38 +33,49 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 # ============================================================
 $logRaiz = "C:\Users\Public\Documents\Logs"
 $logDir  = "$logRaiz\Padronizacao"
-$logFile = "$logDir\padronizacao_$(Get-Date -Format 'yyyy-MM-dd_HH-mm-ss').log"
-
-New-Item -ItemType Directory -Path $logRaiz -Force | Out-Null
-New-Item -ItemType Directory -Path $logDir  -Force | Out-Null
+$regPath = "HKLM:\SOFTWARE\Padronizacao"
+$script:hasIssues = $false
+New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop | Out-Null
+if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force -ErrorAction Stop | Out-Null }
+$runId = (Get-ItemProperty -Path $regPath -Name RunId -ErrorAction SilentlyContinue).RunId
+$logFile = (Get-ItemProperty -Path $regPath -Name LogFile -ErrorAction SilentlyContinue).LogFile
+if ([string]::IsNullOrWhiteSpace($runId) -or [string]::IsNullOrWhiteSpace($logFile) -or -not (Test-Path -LiteralPath (Split-Path -Parent $logFile))) {
+    $runId = [guid]::NewGuid().ToString()
+    $logFile = Join-Path $logDir ("padronizacao_{0}_{1}.log" -f (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'), $runId.Substring(0,8))
+    Set-ItemProperty -Path $regPath -Name RunId -Value $runId -ErrorAction Stop
+    Set-ItemProperty -Path $regPath -Name LogFile -Value $logFile -ErrorAction Stop
+}
 
 function Write-Log {
     param(
         [string]$Mensagem,
-        [ValidateSet("INFO","OK","ERRO","AVISO","ETAPA")]
+        [ValidateSet("INFO","SUCCESS","ERROR","WARN","STEP","OK","ERRO","AVISO","ETAPA")]
         [string]$Tipo = "INFO"
     )
 
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $linha = "[$timestamp] [$Tipo] $Mensagem"
+    $safeMessage = [string]$Mensagem
+    $safeMessage = $safeMessage -replace '(?i)((?:password|senha|credential|credencial)(?:\s+\w+)?\s*[:=]\s*)(?:"[^"]*"|''[^'']*''|[^\s;]+)', '$1[REDACTED]'
+    if ($Tipo -in @('ERROR','ERRO','WARN','AVISO')) { $script:hasIssues = $true }
+    $linha = "[$timestamp] [RunId=$runId] [$Tipo] $safeMessage"
 
-    $linha | Out-File -FilePath $logFile -Append -Encoding UTF8
+    $linha | Out-File -FilePath $logFile -Append -Encoding UTF8 -ErrorAction Stop
 
     switch ($Tipo) {
-        "ETAPA" { Write-Host "`n$linha" -ForegroundColor Cyan }
-        "OK"    { Write-Host $linha -ForegroundColor Green }
-        "ERRO"  { Write-Host $linha -ForegroundColor Red }
-        "AVISO" { Write-Host $linha -ForegroundColor Yellow }
+        { $_ -in "ETAPA", "STEP" } { Write-Host "`n$linha" -ForegroundColor Cyan }
+        { $_ -in "OK", "SUCCESS" } { Write-Host $linha -ForegroundColor Green }
+        { $_ -in "ERRO", "ERROR" } { Write-Host $linha -ForegroundColor Red }
+        { $_ -in "AVISO", "WARN" } { Write-Host $linha -ForegroundColor Yellow }
         default { Write-Host $linha -ForegroundColor White }
     }
 }
 
 function Write-LogErro {
     param([string]$Mensagem, [System.Management.Automation.ErrorRecord]$Excecao)
-    Write-Log $Mensagem "ERRO"
+    Write-Log $Mensagem "ERROR"
     if ($Excecao) {
-        Write-Log "Detalhe: $($Excecao.Exception.Message)" "ERRO"
-        Write-Log "Linha  : $($Excecao.InvocationInfo.ScriptLineNumber)" "ERRO"
+        Write-Log "Exceção: $($Excecao.Exception.GetType().FullName); detalhe: $($Excecao.Exception.Message)" "ERROR"
+        Write-Log "Linha: $($Excecao.InvocationInfo.ScriptLineNumber)" "ERROR"
     }
 }
 
@@ -56,12 +84,6 @@ function Write-LogErro {
 # ============================================================
 $totalEtapas = 9
 $regPath = "HKLM:\SOFTWARE\Padronizacao"
-
-$scriptPath = if ($MyInvocation.MyCommand.Path) {
-    $MyInvocation.MyCommand.Path
-} else {
-    [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-}
 
 function Get-Etapa {
     if (Test-Path $regPath) {
@@ -73,7 +95,7 @@ function Get-Etapa {
 function Set-Etapa {
     param([int]$Numero)
     if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
-    Set-ItemProperty -Path $regPath -Name "Etapa" -Value $Numero
+    Set-ItemProperty -Path $regPath -Name "Etapa" -Value $Numero -ErrorAction Stop
 }
 
 function Get-DadoSalvo {
@@ -87,25 +109,32 @@ function Get-DadoSalvo {
 function Set-DadoSalvo {
     param([string]$Chave, [string]$Valor)
     if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
-    Set-ItemProperty -Path $regPath -Name $Chave -Value $Valor
+    Set-ItemProperty -Path $regPath -Name $Chave -Value $Valor -ErrorAction Stop
 }
 
 function Set-RunOnce {
+    if ([string]::IsNullOrWhiteSpace($scriptPath) -or -not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+        throw "Arquivo de retomada inválido: o script não existe em '$scriptPath'."
+    }
     Set-DadoSalvo "ScriptPath" $scriptPath
-
-    $cmd = "PowerShell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $powershellExe)) { throw 'Windows PowerShell 5.1 não foi encontrado para a retomada.' }
+    $cmd = "`"$powershellExe`" -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
 
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" `
-                     -Name "Padronizacao" `
-                     -Value $cmd
+                     -Name "!Padronizacao" `
+                     -Value $cmd -ErrorAction Stop
 
-    Write-Log "RunOnce configurado para retomada após reboot." "INFO"
+    Write-Log "RunOnce configurado para '$scriptPath'; o prefixo ! mantém o valor até a inicialização do processo. A execução remove o valor após validar a retomada." "INFO"
 }
 
 function Remove-Estado {
     Remove-Item -Path $regPath -Recurse -Force -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" `
                         -Name "Padronizacao" `
+                        -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" `
+                        -Name "!Padronizacao" `
                         -ErrorAction SilentlyContinue
 }
 
@@ -116,6 +145,29 @@ function Update-Progresso {
         -Activity "Padronização Corporativa — by Eduardo Ferreira" `
         -Status "Etapa $Numero/$totalEtapas — $Status" `
         -PercentComplete $percentual
+}
+
+function Complete-PendingAction {
+    $pending = Get-DadoSalvo 'PendingAction'
+    if ([string]::IsNullOrWhiteSpace($pending)) { return }
+    $expectedName = Get-DadoSalvo 'Hostname'
+    $expectedDomain = Get-DadoSalvo 'Dominio'
+    $system = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+    $mismatch = $null
+    if ($system.Name -ine $expectedName) { $mismatch = "hostname esperado '$expectedName', encontrado '$($system.Name)'" }
+    if (-not $mismatch -and $pending -in @('JoinDomain','RenameDomainComputer') -and (-not $system.PartOfDomain -or $system.Domain -ine $expectedDomain)) {
+        $mismatch = "domínio esperado '$expectedDomain', estado atual PartOfDomain=$($system.PartOfDomain), Domain='$($system.Domain)'"
+    }
+    if ($mismatch) {
+        Write-Log "Retomada não confirmada ($mismatch). Etapa 3 reaberta para diagnóstico e nova decisão interativa; nenhum sucesso foi registrado." 'WARN'
+        Set-Etapa 2
+        Remove-ItemProperty -Path $regPath -Name PendingAction -ErrorAction SilentlyContinue
+        return
+    }
+    Set-Etapa 3
+    Remove-ItemProperty -Path $regPath -Name PendingAction -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name '!Padronizacao' -ErrorAction SilentlyContinue
+    Write-Log "Ação '$pending' validada após reinicialização; etapa 3 confirmada." 'SUCCESS'
 }
 
 function Confirmar-Etapa {
@@ -137,6 +189,33 @@ function Test-Internet {
     } catch {
         return $false
     }
+}
+
+function Get-DomainController {
+    param([Parameter(Mandatory=$true)][string]$Domain)
+    try {
+        $records = Resolve-DnsName -Name "_ldap._tcp.dc._msdcs.$Domain" -Type SRV -DnsOnly -ErrorAction Stop
+        $targets = @($records | Where-Object { $_.NameTarget } | Sort-Object Priority | Select-Object -ExpandProperty NameTarget -Unique)
+        if (-not $targets) { throw 'Nenhum registro SRV LDAP foi retornado.' }
+    } catch {
+        throw "Falha ao localizar controladores do domínio '$Domain' por DNS SRV. Tipo=$($_.Exception.GetType().Name); detalhe=$($_.Exception.Message)"
+    }
+    foreach ($target in $targets) {
+        $dc = $target.TrimEnd('.')
+        try {
+            $addresses = [System.Net.Dns]::GetHostAddresses($dc)
+            if (-not $addresses) { continue }
+            $ports = @(135, 389, 445)
+            $checks = @{}
+            foreach ($port in $ports) { $checks[$port] = Test-NetConnection -ComputerName $dc -Port $port -InformationLevel Quiet -WarningAction SilentlyContinue }
+            if (($checks.Values | Where-Object { -not $_ }).Count -eq 0) { return $dc }
+            $portSummary = ($checks.GetEnumerator() | Sort-Object Name | ForEach-Object { '{0}={1}' -f $_.Name, $_.Value }) -join ', '
+            Write-Log "Controlador '$dc' resolveu para $($addresses -join ', '), portas TCP testadas: $portSummary." 'WARN'
+        } catch {
+            Write-Log "Falha de resolução/conectividade para controlador '$dc': $($_.Exception.Message)" 'WARN'
+        }
+    }
+    throw "Os registros SRV de '$Domain' foram encontrados, mas nenhum controlador respondeu nas portas TCP/135, TCP/389 e TCP/445."
 }
 
 function Get-WindowsEdicao {
@@ -205,29 +284,35 @@ function Assert-HostnameValido {
 # FUNÇÕES DE INSTALAÇÃO
 # ============================================================
 function Instalar-OfficeMicrosoft365 {
+    $officeInstaller = Join-Path $env:TEMP 'OfficeSetup.exe'
     try {
         $officeUrl = "https://c2rsetup.officeapps.live.com/c2r/download.aspx?ProductreleaseID=O365ProPlusRetail&platform=x64&language=pt-br&version=O16GA"
-        $officeInstaller = "$env:TEMP\OfficeSetup.exe"
 
         Write-Log "Baixando instalador Microsoft 365 Apps..." "INFO"
         Invoke-WebRequest -Uri $officeUrl -OutFile $officeInstaller -UseBasicParsing -ErrorAction Stop
 
         Write-Log "Iniciando instalação do Microsoft 365 Apps..." "INFO"
-        $proc = Start-Process $officeInstaller -Wait -PassThru
+        $proc = Start-Process $officeInstaller -Wait -PassThru -ErrorAction Stop
 
         if ($proc.ExitCode -eq 0) {
-            Write-Log "Microsoft 365 Apps instalado com sucesso." "OK"
+            if (Test-OfficeInstalado) { Write-Log "Microsoft 365 Apps instalado e detectado." 'SUCCESS'; return $true }
+            Write-Log "O instalador retornou sucesso, mas o Office não foi detectado na verificação posterior." 'ERROR'
+            return $false
         } else {
-            Write-Log "Instalador do Office retornou código $($proc.ExitCode). Verifique manualmente." "AVISO"
+            Write-Log "Instalador do Office retornou código $($proc.ExitCode)." 'WARN'
+            return $false
         }
 
-        Remove-Item $officeInstaller -Force -ErrorAction SilentlyContinue
     } catch {
         Write-LogErro "Falha ao instalar Microsoft 365 Apps." $_
+        return $false
+    } finally {
+        Remove-Item $officeInstaller -Force -ErrorAction SilentlyContinue
     }
 }
 
 function Instalar-DriversFabricante {
+    $ok = $true
     try {
         $fabricante = (Get-CimInstance Win32_ComputerSystem).Manufacturer
         Write-Log "Fabricante detectado: $fabricante" "INFO"
@@ -235,31 +320,38 @@ function Instalar-DriversFabricante {
         switch -Wildcard ($fabricante.ToLower()) {
             "*dell*" {
                 Write-Log "Instalando Dell Command Update..." "INFO"
-                winget install --id Dell.CommandUpdate --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-File -FilePath $logFile -Append -Encoding UTF8
+                $null = winget install --id Dell.CommandUpdate --silent --accept-package-agreements --accept-source-agreements 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "winget retornou código $LASTEXITCODE ao instalar Dell Command Update." }
 
                 $dcu = "${env:ProgramFiles}\Dell\CommandUpdate\dcu-cli.exe"
                 if (Test-Path $dcu) {
                     Write-Log "Executando Dell Command Update..." "INFO"
-                    Start-Process $dcu -ArgumentList "/applyUpdates -silent" -Wait
-                    Write-Log "Dell Command Update concluído." "OK"
+                    $proc = Start-Process $dcu -ArgumentList "/applyUpdates -silent" -Wait -PassThru -ErrorAction Stop
+                    if ($proc.ExitCode -ne 0) { throw "Dell Command Update retornou código $($proc.ExitCode)." }
+                    Write-Log "Dell Command Update terminou com código zero." 'SUCCESS'
                 } else {
                     Write-Log "dcu-cli.exe não encontrado. Execute manualmente se necessário." "AVISO"
+                    $ok = $false
                 }
             }
 
             "*lenovo*" {
                 Write-Log "Instalando Lenovo System Update..." "INFO"
-                winget install --id Lenovo.SystemUpdate --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-File -FilePath $logFile -Append -Encoding UTF8
+                $null = winget install --id Lenovo.SystemUpdate --silent --accept-package-agreements --accept-source-agreements 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "winget retornou código $LASTEXITCODE ao instalar Lenovo System Update." }
                 Write-Log "Lenovo System Update instalado. Execute a aplicação manualmente para aplicar drivers pendentes." "AVISO"
             }
 
             default {
-                Write-Log "Fabricante '$fabricante' não mapeado. Nenhum driver instalado automaticamente." "AVISO"
+                Write-Log "Fabricante '$fabricante' não mapeado; etapa opcional não executou instalação automática." "INFO"
+                $ok = $false
             }
         }
     } catch {
         Write-LogErro "Falha na instalação de drivers do fabricante." $_
+        $ok = $false
     }
+    return $ok
 }
 
 # ============================================================
@@ -276,8 +368,35 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Log "Script iniciado. Etapa atual: $etapaAtual" "INFO"
 Write-Log "Log salvo em: $logFile" "INFO"
 
+# RunOnce com prefixo ! é consumido somente depois de iniciar o processo. Removemos
+# explicitamente ao iniciar para evitar repetição automática após uma retomada inválida.
+Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name '!Padronizacao' -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name 'Padronizacao' -ErrorAction SilentlyContinue
+try {
+    Complete-PendingAction
+    $etapaAtual = Get-Etapa
+    if ($etapaAtual -ge 3) {
+        $expectedName = Get-DadoSalvo 'Hostname'
+        $expectedDomain = Get-DadoSalvo 'Dominio'
+        $actualSystem = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+        $stateMismatch = -not [string]::IsNullOrWhiteSpace($expectedName) -and $actualSystem.Name -ine $expectedName
+        if (-not $stateMismatch -and $expectedDomain -and $expectedDomain -notin @('Não ingressado','Etapa pulada')) {
+            $stateMismatch = -not $actualSystem.PartOfDomain -or $actualSystem.Domain -ine $expectedDomain
+        }
+        if ($stateMismatch) {
+            Set-Etapa 2
+            $etapaAtual = 2
+            Write-Log "Estado legado/inconsistente detectado: hostname/domínio real não corresponde ao registro. Etapa 3 reaberta para nova validação interativa." 'WARN'
+        }
+    }
+} catch {
+    Write-LogErro 'Falha ao validar retomada após reinicialização; o progresso foi preservado para diagnóstico.' $_
+    Write-Host 'A retomada não foi validada. Corrija a condição indicada no log e execute novamente o arquivo .ps1.' -ForegroundColor Red
+    exit 4
+}
+
 if ($etapaAtual -gt 0) {
-    Write-Log "Retomando a partir da etapa $etapaAtual após reboot." "AVISO"
+    Write-Log "Retomando a partir da etapa $etapaAtual após reboot." "INFO"
 }
 
 # ============================================================
@@ -288,22 +407,22 @@ if ($etapaAtual -lt 1) {
     Write-Log "ETAPA 1 — Verificação da conta Administrador local" "ETAPA"
 
     try {
-        $admin = Get-LocalUser -Name "Administrador" -ErrorAction SilentlyContinue
+        $admin = Get-LocalUser -ErrorAction Stop | Where-Object { $_.SID.Value -match '-500$' } | Select-Object -First 1
 
         if (-not $admin) {
-            Write-Log "Conta local 'Administrador' não encontrada. Verifique idioma/edição do Windows." "AVISO"
+            Write-Log "A conta interna RID-500 não foi encontrada. A etapa foi ignorada sem habilitar outra conta administrativa." "WARN"
         } else {
             if (-not $admin.Enabled) {
-                Enable-LocalUser -Name "Administrador" -ErrorAction Stop
-                Write-Log "Conta 'Administrador' habilitada." "OK"
+                Enable-LocalUser -InputObject $admin -ErrorAction Stop
+                Write-Log "Conta interna RID-500 habilitada conforme solicitação do técnico." "SUCCESS"
             } else {
-                Write-Log "Conta 'Administrador' já está habilitada." "OK"
+                Write-Log "Conta interna RID-500 já está habilitada." "SUCCESS"
             }
 
-            $alterarSenha = Read-Host "Deseja definir/alterar a senha do Administrador local? (S/N)"
+            $alterarSenha = Read-Host "Deseja definir/alterar a senha da conta interna de administrador local? (S/N)"
             if ($alterarSenha -match '^[sS]') {
                 do {
-                    $adminPass        = Read-Host "Defina a senha para a conta Administrador" -AsSecureString
+                    $adminPass        = Read-Host "Defina a senha da conta interna de administrador" -AsSecureString
                     $adminPassConfirm = Read-Host "Confirme a senha" -AsSecureString
 
                     $ptr1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($adminPass)
@@ -312,7 +431,7 @@ if ($etapaAtual -lt 1) {
                     $pass2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($ptr2)
 
                     if ($pass1 -ne $pass2) {
-                        Write-Log "As senhas não coincidem. Tente novamente." "AVISO"
+                        Write-Log "As senhas não coincidem. Tente novamente." "INFO"
                     }
 
                     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr1)
@@ -321,18 +440,20 @@ if ($etapaAtual -lt 1) {
 
                 # Respeita a política de expiração do domínio/dispositivo;
                 # contas locais corporativas devem ter rotação gerenciada (ex.: Windows LAPS).
-                Set-LocalUser -Name "Administrador" -Password $adminPass -ErrorAction Stop
-                Write-Log "Senha do Administrador local definida." "OK"
-
-                $pass1 = $null
-                $pass2 = $null
-                $adminPass = $null
-                $adminPassConfirm = $null
-                [System.GC]::Collect()
+                try {
+                    Set-LocalUser -InputObject $admin -Password $adminPass -ErrorAction Stop
+                    Write-Log "Senha da conta interna de administrador definida." "OK"
+                } finally {
+                    $pass1 = $null; $pass2 = $null
+                    $adminPass = $null; $adminPassConfirm = $null
+                    [System.GC]::Collect()
+                }
             }
         }
     } catch {
         Write-LogErro "Falha ao verificar/configurar Administrador local." $_
+        Write-Log 'A etapa administrativa local não foi confirmada; o estado não será avançado.' 'ERROR'
+        exit 9
     }
 
     Set-Etapa 1
@@ -351,7 +472,7 @@ if ($etapaAtual -lt 2) {
     } else {
         Write-Log "Sem internet. Verifique rede, DNS ou proxy antes de continuar." "ERRO"
         pause
-        Exit
+        exit 5
     }
 
     $edicao = Get-WindowsEdicao
@@ -374,14 +495,14 @@ if ($etapaAtual -lt 2) {
 
         Write-Log "Upgrade Home -> Pro pendente. Faça o upgrade com uma licença válida pelos canais oficiais da Microsoft e execute novamente após o reboot." "AVISO"
         pause
-        Exit
+        exit 6
     }
 
     if (Test-OfficeInstalado) {
         Write-Log "Microsoft Office já está instalado." "OK"
         Set-DadoSalvo "OfficeInstalado" "1"
     } else {
-        Write-Log "Microsoft Office não encontrado. Instalação será executada na etapa de Office." "AVISO"
+        Write-Log "Microsoft Office não encontrado. Instalação será executada na etapa de Office." "INFO"
         Set-DadoSalvo "OfficeInstalado" "0"
     }
 
@@ -411,26 +532,47 @@ if ($etapaAtual -lt 3) {
                 } while (-not $hostnameValido)
 
                 $dominio = Read-Host "Digite o domínio. Ex: apoio.local, locus.local, gesquadra.com"
+                $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+                if ($computer.PartOfDomain -and $computer.Domain -ine $dominio) {
+                    throw "Esta máquina já pertence ao domínio '$($computer.Domain)'. Remova-a do domínio atual pelo procedimento aprovado antes de ingressar em '$dominio'."
+                }
+                if ($computer.PartOfDomain -and $computer.Domain -ieq $dominio -and $computer.Name -ieq $novoHostname) {
+                    Set-DadoSalvo "Hostname" $novoHostname
+                    Set-DadoSalvo "Dominio" $dominio
+                    Write-Log "Máquina já pertence ao domínio desejado e já possui o hostname '$novoHostname'; nenhuma alteração necessária." 'SUCCESS'
+                    Set-Etapa 3
+                    break
+                }
+                $dc = Get-DomainController -Domain $dominio
+                Write-Log "Controlador selecionado: $dc (registros SRV resolvidos e TCP/135, TCP/389 e TCP/445 acessíveis). Kerberos/UDP e RPC dinâmico dependem das regras de rede do ambiente." 'INFO'
+                try {
+                    $existingDnsName = Resolve-DnsName -Name "$novoHostname.$dominio" -Type A -DnsOnly -ErrorAction Stop
+                    if ($existingDnsName) { Write-Log "O nome DNS '$novoHostname.$dominio' já resolve; confirme se o registro/objeto de computador existente pode ser reutilizado antes do ingresso." 'WARN' }
+                } catch { Write-Log "Nenhum registro A para '$novoHostname.$dominio' foi encontrado; essa consulta não substitui a verificação do objeto de computador no Active Directory." 'INFO' }
                 $domAdmin = Read-Host "Usuário do domínio com permissão para adicionar máquinas"
                 $domPass = Read-Host "Senha do usuário do domínio" -AsSecureString
                 $credencial = New-Object System.Management.Automation.PSCredential($domAdmin, $domPass)
 
                 Set-DadoSalvo "Hostname" $novoHostname
                 Set-DadoSalvo "Dominio" $dominio
-
-                Add-Computer -DomainName $dominio -Credential $credencial -NewName $novoHostname -Force -ErrorAction Stop
-                Write-Log "Máquina '$novoHostname' adicionada ao domínio '$dominio'." "OK"
-
-                $credencial = $null
-                $domPass = $null
+                if ($computer.PartOfDomain) {
+                    Set-DadoSalvo 'PendingAction' 'RenameDomainComputer'
+                    Set-RunOnce
+                    Rename-Computer -NewName $novoHostname -DomainCredential $credencial -Force -ErrorAction Stop
+                } else {
+                    Set-DadoSalvo 'PendingAction' 'JoinDomain'
+                    Set-RunOnce
+                    $joinResult = Add-Computer -DomainName $dominio -Server $dc -Credential $credencial -NewName $novoHostname -Force -PassThru -ErrorAction Stop
+                    if ($joinResult -and $joinResult.PSObject.Properties['HasSucceeded'] -and -not $joinResult.HasSucceeded) {
+                        throw "Add-Computer indicou que o ingresso não foi concluído no controlador '$dc'."
+                    }
+                }
+                Write-Log "Operação de hostname/domínio enviada. O progresso só será confirmado após validação depois da reinicialização." 'INFO'
+                $credencial = $null; $domPass = $null
                 [System.GC]::Collect()
-
-                Set-Etapa 3
-                Set-RunOnce
-                Write-Log "Reiniciando para aplicar hostname/domínio..." "INFO"
-                Start-Sleep -Seconds 5
-                Restart-Computer -Force
-                Exit
+                Start-Sleep -Seconds 3
+                Restart-Computer -Force -ErrorAction Stop
+                exit 0
             }
 
             "2" {
@@ -439,31 +581,41 @@ if ($etapaAtual -lt 3) {
                     $hostnameValido = Assert-HostnameValido $novoHostname
                 } while (-not $hostnameValido)
 
+                if ($env:COMPUTERNAME -ieq $novoHostname) {
+                    Set-DadoSalvo "Hostname" $novoHostname
+                    Set-DadoSalvo "Dominio" "Não ingressado"
+                    Write-Log "Hostname já é '$novoHostname'; nenhuma renomeação nem reboot necessário." 'SUCCESS'
+                    Set-Etapa 3
+                    break
+                }
+
                 Set-DadoSalvo "Hostname" $novoHostname
                 Set-DadoSalvo "Dominio" "Não ingressado"
-
+                Set-DadoSalvo 'PendingAction' 'RenameComputer'
+                Set-RunOnce
                 Rename-Computer -NewName $novoHostname -Force -ErrorAction Stop
                 Write-Log "Hostname alterado para '$novoHostname'." "OK"
-
-                Set-Etapa 3
-                Set-RunOnce
                 Write-Log "Reiniciando para aplicar hostname..." "INFO"
-                Start-Sleep -Seconds 5
-                Restart-Computer -Force
-                Exit
+                Start-Sleep -Seconds 3
+                Restart-Computer -Force -ErrorAction Stop
+                exit 0
             }
 
             default {
                 Set-DadoSalvo "Hostname" $env:COMPUTERNAME
                 Set-DadoSalvo "Dominio" "Etapa pulada"
-                Write-Log "Etapa de hostname/domínio pulada pelo técnico." "AVISO"
+                Write-Log "Etapa de hostname/domínio pulada pelo técnico." "INFO"
             }
         }
     } catch {
+        $credencial = $null; $domPass = $null; $domAdmin = $null
+        [System.GC]::Collect()
+        Remove-ItemProperty -Path $regPath -Name 'PendingAction' -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce' -Name '!Padronizacao' -ErrorAction SilentlyContinue
         Write-LogErro "Falha na etapa de hostname/domínio." $_
-        Write-Log "Verifique conectividade, DNS, credenciais e permissões no domínio." "AVISO"
+        Write-Log "Diagnóstico: revise DNS SRV, resolução de nome, portas TCP/135, 389 e 445, credenciais/permissões, domínio atual e conflitos de conta ou hostname. Kerberos/UDP e RPC dinâmico também dependem das regras de rede do ambiente. Nenhuma senha foi registrada." "WARN"
         pause
-        Exit
+        exit 8
     }
 
     Set-Etapa 3
@@ -486,18 +638,16 @@ if ($etapaAtual -lt 4) {
 
             Import-Module PSWindowsUpdate -Force
 
-            $wuJob = Start-Job -ScriptBlock {
-                Import-Module PSWindowsUpdate -Force
-                Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -Verbose 2>&1
-            }
-
-            Write-Log "Windows Update iniciado em background. Job ID: $($wuJob.Id)." "OK"
+            Write-Log "Instalação de atualizações iniciada em primeiro plano; aguarde o comando concluir." "INFO"
+            $wuResult = Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -Verbose -ErrorAction Stop
+            if ($wuResult) { $wuResult | Select-Object -First 20 | ForEach-Object { Write-Log ($_ | Out-String).Trim() 'INFO' } }
+            Write-Log "O cmdlet de Windows Update retornou sem erro terminante." 'SUCCESS'
         } catch {
             Write-LogErro "Falha ao iniciar Windows Update." $_
             Write-Log "Continuando sem Windows Update." "AVISO"
         }
     } else {
-        Write-Log "Windows Update pulado pelo técnico." "AVISO"
+        Write-Log "Windows Update pulado pelo técnico." "INFO"
     }
 
     Set-Etapa 4
@@ -513,7 +663,7 @@ if ($etapaAtual -lt 5) {
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
         Write-Log "Winget não encontrado. Instale o App Installer pela Microsoft Store e execute novamente." "ERRO"
         pause
-        Exit
+        exit 7
     }
 
     $apps = @(
@@ -529,12 +679,13 @@ if ($etapaAtual -lt 5) {
         try {
             Write-Log "Instalando/verificando $($app.Nome)..." "INFO"
             $resultado = winget install --id $app.Id --silent --accept-package-agreements --accept-source-agreements 2>&1
-            $resultado | Out-File -FilePath $logFile -Append -Encoding UTF8
+            $resultado | Select-Object -First 8 | ForEach-Object { Write-Log ([string]$_) 'INFO' }
 
-            if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335189) {
-                Write-Log "$($app.Nome) instalado ou já existente." "OK"
+            $appExitCode = $LASTEXITCODE
+            if ($appExitCode -eq 0) {
+                Write-Log "$($app.Nome): winget terminou com código zero." 'SUCCESS'
             } else {
-                Write-Log "$($app.Nome) retornou código $LASTEXITCODE. Verifique manualmente." "AVISO"
+                Write-Log "$($app.Nome) retornou código $appExitCode; item marcado para verificação manual." 'WARN'
             }
         } catch {
             Write-LogErro "Erro ao instalar $($app.Nome)." $_
@@ -563,10 +714,10 @@ if ($etapaAtual -lt 6) {
             Write-Log "Instalando GLPI Agent..." "INFO"
             $proc = Start-Process msiexec.exe -ArgumentList "/i `"$glpiMsi`" /quiet /norestart SERVER_URL=`"$glpiServer`"" -Wait -PassThru
 
-            if ($proc.ExitCode -eq 0) {
+            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
                 Write-Log "GLPI Agent instalado. Servidor: $glpiServer" "OK"
             } else {
-                Write-Log "msiexec retornou código $($proc.ExitCode)." "AVISO"
+                Write-Log "msiexec retornou código $($proc.ExitCode)." "WARN"
             }
 
             Remove-Item $glpiMsi -Force -ErrorAction SilentlyContinue
@@ -574,7 +725,7 @@ if ($etapaAtual -lt 6) {
             Write-LogErro "Falha ao instalar GLPI Agent." $_
         }
     } else {
-        Write-Log "Instalação do GLPI Agent pulada pelo técnico." "AVISO"
+        Write-Log "Instalação do GLPI Agent pulada pelo técnico." "INFO"
     }
 
     Set-Etapa 6
@@ -591,8 +742,8 @@ if ($etapaAtual -lt 7) {
         Write-Log "Office já está instalado. Pulando instalação." "OK"
         Set-DadoSalvo "OfficeInstalado" "1"
     } else {
-        Write-Log "Office não encontrado. Instalando via link C2R Microsoft 365 Apps." "AVISO"
-        Instalar-OfficeMicrosoft365
+        Write-Log "Office não encontrado. Instalando via link C2R Microsoft 365 Apps." "INFO"
+        if (Instalar-OfficeMicrosoft365) { Set-DadoSalvo 'OfficeInstalado' '1' } else { Set-DadoSalvo 'OfficeInstalado' '0' }
     }
 
     Set-Etapa 7
@@ -606,9 +757,9 @@ if ($etapaAtual -lt 8) {
     Write-Log "ETAPA 8 — Drivers do fabricante" "ETAPA"
 
     if (Confirmar-Etapa "Instalar/atualizar drivers do fabricante") {
-        Instalar-DriversFabricante
+        if (-not (Instalar-DriversFabricante)) { Set-DadoSalvo 'DriversStatus' 'Verificação manual necessária' }
     } else {
-        Write-Log "Etapa de drivers pulada pelo técnico." "AVISO"
+        Write-Log "Etapa de drivers pulada pelo técnico." "INFO"
     }
 
     Set-Etapa 8
@@ -626,33 +777,13 @@ if ($etapaAtual -lt 9) {
     Write-Host "============================================" -ForegroundColor Yellow
 
     Write-Host "Conclua a ativação do Windows e do Office usando licenças válidas e os canais oficiais da organização/Microsoft." -ForegroundColor Yellow
-    Write-Log "Ativação delegada ao processo de licenciamento da organização; nenhum código remoto foi executado." "AVISO"
+    Write-Log "Ativação delegada ao processo de licenciamento da organização; nenhum código remoto foi executado." "INFO"
 
     Set-Etapa 9
 }
 
-# ============================================================
-# AGUARDAR WINDOWS UPDATE, SE AINDA ESTIVER RODANDO
-# ============================================================
-Write-Log "Verificando status do Windows Update em background..." "INFO"
-$wuJobs = Get-Job -State Running -ErrorAction SilentlyContinue | Where-Object { $_.Command -like "*WindowsUpdate*" }
-
-if ($wuJobs) {
-    Write-Log "Windows Update ainda está em execução. Aguardando até 30 minutos..." "AVISO"
-    $concluido = $wuJobs | Wait-Job -Timeout 1800
-
-    if ($concluido) {
-        $wuJobs | Receive-Job | Out-File -FilePath $logFile -Append -Encoding UTF8
-        Write-Log "Windows Update concluído." "OK"
-    } else {
-        Write-Log "Windows Update não concluiu no tempo limite. Verifique manualmente." "AVISO"
-        $wuJobs | Stop-Job -ErrorAction SilentlyContinue
-    }
-
-    $wuJobs | Remove-Job -ErrorAction SilentlyContinue
-} else {
-    Write-Log "Windows Update finalizado, pulado ou não iniciado nesta sessão." "INFO"
-}
+# Windows Update é executado em primeiro plano na etapa 4. Jobs do PowerShell não
+# sobrevivem a reinicializações; por isso não há job em memória a aguardar aqui.
 
 # ============================================================
 # RESUMO FINAL
@@ -665,7 +796,9 @@ $windowsEdicao = Get-WindowsEdicao
 Write-Progress -Activity "Padronização Corporativa" -Completed
 
 Write-Log "============================================" "INFO"
-Write-Log "PADRONIZAÇÃO CONCLUÍDA" "OK"
+$resumoTipo = if ($script:hasIssues) { 'WARN' } else { 'SUCCESS' }
+$resumoTexto = if ($script:hasIssues) { 'PADRONIZAÇÃO CONCLUÍDA COM AVISOS — revise o log' } else { 'PADRONIZAÇÃO CONCLUÍDA' }
+Write-Log $resumoTexto $resumoTipo
 Write-Log "Hostname : $novoHostname" "INFO"
 Write-Log "Domínio  : $dominio" "INFO"
 Write-Log "Windows  : $windowsEdicao" "INFO"
@@ -676,7 +809,7 @@ Write-Log "============================================" "INFO"
 Remove-Estado
 
 Write-Host "`n============================================" -ForegroundColor Cyan
-Write-Host "   PADRONIZAÇÃO CONCLUÍDA!" -ForegroundColor Cyan
+Write-Host "   $resumoTexto" -ForegroundColor Cyan
 Write-Host "   Hostname : $novoHostname" -ForegroundColor White
 Write-Host "   Domínio  : $dominio" -ForegroundColor White
 Write-Host "   Windows  : $windowsEdicao" -ForegroundColor White
