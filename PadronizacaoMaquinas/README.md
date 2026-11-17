@@ -1,288 +1,68 @@
-# 🏢 PaerroTech
+﻿# Padronização de Máquinas
 
-<p align="center">
-  <b>Automação • Padronização • Infraestrutura</b><br>
-  Soluções internas para otimizar operações de TI
-</p>
+Automação interativa para preparar estações Windows da PaerroTech. O script mantém as nove etapas e exige uma sessão interativa de técnico. Execute em Windows 10/11 com Windows PowerShell 5.1, conta com privilégios administrativos e acesso à rede corporativa. A elevação por UAC é tentada automaticamente quando o arquivo é iniciado sem esses privilégios.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Status-Em%20Produção-green">
-  <img src="https://img.shields.io/badge/PowerShell-Automation-blue">
-  <img src="https://img.shields.io/badge/Windows-Suporte-0078D6">
-  <img src="https://img.shields.io/badge/License-Uso%20Interno-red">
-</p>
+## Execução recomendada
 
----
-
-## 📌 Visão Geral
-
-A **PaerroTech** é o repositório central de automações da equipe de TI, desenvolvido para padronizar processos, reduzir tempo operacional e aumentar a eficiência no suporte técnico.
-
-Este ambiente reúne scripts utilizados no dia a dia para:
-
-- 🖥️ Padronização de máquinas
-- 🔧 Manutenção preventiva
-- 🌐 Diagnóstico de rede
-- ⚙️ Automação de tarefas repetitivas
-- 📦 Deploy de aplicações
-
----
-
-## 🧭 Navegação
-
-- [📂 Estrutura](#-estrutura-do-repositório)
-- [🚀 Como usar](#-como-utilizar)
-- [📜 Padrões](#-padrão-de-desenvolvimento)
-- [🔐 Segurança](#-segurança)
-- [📈 Evolução](#-evolução)
-
----
-
-## 🗂️ Estrutura do Repositório
-
-```
-
-📁 PaerroTech
-├── 📁 Padronizacao-Maquinas/   → Setup completo de estações
-├── 📁 Preventivas/             → Rotinas de manutenção
-├── 📁 ScriptsMikrotik          → Scripts de FailOver + LoadBalance
-├── 📁 Scripts/                 → Utilitários diversos
-└── README.md
-
-````
-
----
-
-## 🚀 Como utilizar
-
-### 🔹 Execução remota (rápida)
+Baixe/clone o repositório e inicie o arquivo como arquivo PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/Forevit/PaerroTech/main/PadronizacaoMaquinas/padronizacao.ps1 | iex
-````
-
-> ⚠️ Executar como administrador
-> ⚠️ Utilize apenas scripts confiáveis
-
-# 🖥️ Padronização de Máquinas
-
-Scripts responsáveis pela preparação completa de estações de trabalho em ambiente corporativo.
-
----
-
-## 📌 Descrição
-
-Esta pasta contém o script de **padronização automática de máquinas Windows**, utilizado para agilizar o processo de entrega de equipamentos e garantir conformidade com o ambiente da empresa.
-
-O script executa diversas configurações essenciais de forma automatizada, reduzindo o tempo de setup e evitando erros manuais.
-
----
-
-## ⚙️ Funcionalidades
-
-- Definição de hostname
-- Ingresso automático no domínio
-- Criação e configuração do administrador local
-- Instalação de softwares essenciais via Winget:
-  - Google Chrome
-  - Mozilla Firefox
-  - Java
-  - AnyDesk
-  - Adobe Reader
-  - WinRAR
-- Instalação do GLPI Agent
-- Instalação do Microsoft Office 2021
-- Instalação de drivers por fabricante:
-  - Dell
-  - Lenovo
-- Execução de Windows Update em segundo plano
-- Sistema de logs detalhado
-- Execução por etapas com retomada automática após reboot
-
----
-
-### 🔹 Execução local
-
-
-```
 git clone https://github.com/Forevit/PaerroTech.git
-cd PaerroTech
-```
-
-Depois, navegue até o diretório desejado e execute o script.
-
----
-
-## ⚙️ Filosofia do Projeto
-
-Este repositório segue três princípios:
-
-### ⚡ Automação
-
-Reduzir tarefas manuais e repetitivas
-
-### 📏 Padronização
-
-Garantir consistência entre máquinas e ambientes
-
-### 🔒 Segurança
-
-Executar tudo com controle e boas práticas
-
----
-
-## 🧠 Boas práticas
-
-* Executar scripts como **Administrador**
-* Validar antes de rodar em produção
-* Preferir scripts já existentes
-* Documentar alterações
-* Evitar execução de fontes externas
-
----
-
-## 📝 Padrão de Logs
-
-Todos os scripts devem registrar logs em:
-
-```
-C:\Users\Public\Documents\Logs\
-```
-
-Estrutura esperada:
-
-```
-Logs/
- ├── Padronizacao/
- ├── Preventiva/
- └── Outros/
-=======
-```powershell
-git clone https://github.com/Forevit/PaerroTech.git
-cd PaerroTech/PadronizacaoMaquinas
+Set-Location .\PaerroTech\PadronizacaoMaquinas
 .\padronizacao.ps1
 ```
 
----
+Para execução remota, use uma sessão PowerShell elevada. O comando abaixo salva o arquivo em local persistente no ProgramData, verifica se o download não está vazio e se o PowerShell consegue analisá-lo, e então executa o arquivo. Esse caminho permanece disponível ao `RunOnce` depois de reiniciar:
 
-## 🛠️ Padrão de desenvolvimento
-
-Scripts devem seguir:
-
-* ✔ Nome descritivo
-* ✔ Comentários explicativos
-* ✔ Tratamento de erro (`try/catch`)
-* ✔ Sistema de logs
-* ✔ Execução segura
-
-## 🔄 Fluxo de execução
-
-O script é dividido em etapas:
-
-1. Hostname + ingresso no domínio *(requer reboot)*
-2. Configuração do administrador local
-3. Instalação de aplicativos
-4. Instalação do GLPI Agent
-5. Instalação do Office + drivers
-6. Conferência manual de licenças e ativação pelos canais oficiais
-
-✔️ O script continua automaticamente após reinicialização
-✔️ O estado é salvo no registro do Windows
-
----
-
-## 📝 Logs
-
-Os logs são armazenados em:
-
-```
-C:\Users\Public\Documents\Logs\Padronizacao\
+```powershell
+$installDir = Join-Path $env:ProgramData 'PaerroTech\Padronizacao'
+New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+$scriptPath = Join-Path $installDir 'padronizacao.ps1'
+$downloadPath = "$scriptPath.download"
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/Forevit/PaerroTech/main/PadronizacaoMaquinas/padronizacao.ps1' -OutFile $downloadPath -UseBasicParsing -ErrorAction Stop
+if (-not (Test-Path -LiteralPath $downloadPath -PathType Leaf) -or (Get-Item $downloadPath).Length -eq 0) { throw 'Download vazio ou inexistente.' }
+$tokens = $null; $parseErrors = $null
+[System.Management.Automation.Language.Parser]::ParseFile($downloadPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+if ($parseErrors.Count -gt 0) { Remove-Item $downloadPath -Force; throw "Script baixado contém erros de sintaxe: $($parseErrors[0].Message)" }
+Move-Item -LiteralPath $downloadPath -Destination $scriptPath -Force
+$powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$process = Start-Process -FilePath $powershellExe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" -Wait -PassThru -ErrorAction Stop
+if ($process.ExitCode -ne 0) { throw "A execução terminou com código $($process.ExitCode). Consulte o log em C:\Users\Public\Documents\Logs\Padronizacao\." }
 ```
 
-Contêm:
+O formato `irm URL | iex` diretamente com o conteúdo de `padronizacao.ps1` não é suportado. O script principal precisa de `$PSCommandPath` para a elevação e retomada. O bloco acima preserva a experiência remota, mas salva e executa o `.ps1` como arquivo. Baixe apenas de uma origem aprovada pela equipe.
 
-* Status de execução
-* Erros detalhados
-* Saída de comandos
+## Etapas
 
----
+1. Verifica a conta interna de administrador local pelo SID RID-500. Se a conta estiver desabilitada, o script habilita a conta RID-500, como fazia anteriormente com o nome localizado; a troca de senha é opcional, solicitada pelo técnico e lida como SecureString.
+2. Verifica conectividade externa, edição Windows (Pro/Enterprise/Education) e presença do Office.
+3. Permite trocar hostname e, opcionalmente, ingressar no domínio. O script resolve registros DNS SRV, verifica resolução do DC e conectividade TCP/135, TCP/389 e TCP/445 antes de chamar `Add-Computer`; Kerberos/UDP e RPC dinâmico dependem das regras de rede do ambiente.
+4. Opcionalmente instala atualizações com `PSWindowsUpdate` em primeiro plano. O processo não fica em job volátil.
+5. Tenta instalar Chrome, Firefox, Java 8, AnyDesk, Acrobat Reader e WinRAR via WinGet; códigos de saída diferentes de zero ficam como avisos para conferência.
+6. Opcionalmente instala GLPI Agent 1.17 x64.
+7. Instala Microsoft 365 Apps x64 em português do Brasil quando não detectado e verifica novamente a presença do Office.
+8. Opcionalmente instala/usa a ferramenta do fabricante Dell ou Lenovo. A ferramenta Lenovo é instalada; a aplicação das atualizações Lenovo permanece manual.
+9. Orienta a ativação pelos canais oficiais. O script não ativa licenças automaticamente.
 
-## 🔐 Segurança
+Falhas de conectividade, edição Windows incompatível, ausência de WinGet e falha na etapa de hostname/domínio interrompem a execução. Instalações opcionais e alguns instaladores de terceiros registram o código/erro e permitem a continuação, deixando indicação de verificação manual no log. Não interprete uma mensagem de instalação iniciada como prova de instalação concluída.
 
-* ❌ Nunca salvar senhas em texto plano
-* ✔ Utilizar métodos seguros (DPAPI)
-* ✔ Validar scripts antes da execução
-* ❌ Evitar fontes externas não confiáveis
+## Retomada e logs
 
----
+Quando uma mudança de hostname/domínio precisa reiniciar, o script grava a ação pendente e um caminho de arquivo validado, configura `HKLM\...\RunOnce` como `!Padronizacao` e reinicia. O prefixo `!` faz o Windows remover o valor após o comando ser iniciado; o script também o remove explicitamente no início da retomada para não criar um ciclo de tentativas após erro. A retomada ocorre no próximo logon de usuário com privilégios suficientes e continua interativa. Não é uma tarefa `SYSTEM`.
 
-## 📈 Evolução
+A ação só avança para a etapa 3 depois que o hostname e, no ingresso, o domínio são conferidos com `Win32_ComputerSystem` após o reboot. Se hostname ou domínio não confirmar, a etapa 3 é reaberta, o log registra o estado esperado e encontrado, e o técnico pode corrigir a causa e decidir novamente no fluxo interativo.
 
-Este projeto está em constante desenvolvimento.
+O estado fica em `HKLM\SOFTWARE\Padronizacao`; senha não é armazenada ali. O mesmo caminho de log e identificador de execução são reutilizados após reinicialização. Logs ficam em `C:\Users\Public\Documents\Logs\Padronizacao\`.
 
-Planejamentos futuros:
+## Diagnóstico de ingresso no domínio
 
-* 📦 Deploy automatizado em rede
-* 🖥️ Interface gráfica para scripts
-* 📊 Telemetria e relatórios
-* ☁️ Centralização em ambiente web
+Consulte o log mais recente e diferencie as verificações: registros `_ldap._tcp.dc._msdcs.<domínio>` ausentes apontam para resolução/discovery DNS; hostname do controlador sem resolução aponta para DNS do DC; falha em TCP/135, TCP/389 ou TCP/445 aponta para conectividade/firewall/serviço; registros e portas acessíveis com `Add-Computer` falhando indicam que também devem ser verificados credenciais, permissões de ingresso, política de reutilização de conta, nome/conta de computador existente e estado de confiança/domínio atual. A mensagem informa tipo e contexto da exceção sem registrar a senha digitada.
 
----
+Uma máquina já no domínio desejado e com o hostname solicitado é mantida sem reingresso. Máquina em outro domínio é recusada para evitar uma troca implícita; use o processo aprovado para desassociá-la antes. Nome DNS/conta já existente pode depender de permissões e políticas do Active Directory e deve ser investigado com o administrador do domínio.
 
-## 🤝 Contribuição
+## Arquivos
 
-1. Crie uma branch
-2. Faça suas alterações
-3. Abra um Pull Request
-
----
-
-## 👨‍💻 Autor
-=======
-* Credenciais armazenadas temporariamente via **DPAPI**
-* Remoção automática após uso
-* Nenhuma senha salva em texto plano
-* Execução elevada automática (UAC)
-
----
-
-## ⚠️ Atenção
-
-* O script realiza alterações críticas no sistema
-* Pode reiniciar a máquina automaticamente
-* Deve ser utilizado apenas por técnicos autorizados
-* Requer acesso ao domínio corporativo
-
----
-
-## 🛠️ Requisitos
-
-* Windows 10/11
-* PowerShell 5.1 ou superior
-* Acesso à internet
-* Permissão de administrador
-* Credenciais válidas de domínio
-
----
-
-## 📄 Arquivos desta pasta
-
-```
-padronizacao.ps1
-Paerro-Setup.exe (opcional)
-```
-
----
-
-## 👨‍💻 Responsável
-
-**Eduardo Ferreira**
-
-Suporte Técnico Junior
-
----
-
-## ⚠️ Uso interno
-
-Este repositório é destinado ao uso interno da equipe PaerroTech.
-O uso externo deve ser previamente autorizado.
+- `padronizacao.ps1`: script interativo.
+- `padronizacao_script_flowchart.svg`: fluxo resumido.
+- `AUDITORIA.md`: evidências, mudanças, testes e limitações desta auditoria.
+- `Paerro-Setup.exe` e `Paerro-Setup.ico`: artefatos existentes do projeto; não são necessários para executar diretamente o script.
